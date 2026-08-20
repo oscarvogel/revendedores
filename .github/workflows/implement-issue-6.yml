@@ -1,0 +1,27 @@
+name: Implement issue 6
+
+on:
+  push:
+    branches:
+      - issue-6-email-delivery-state
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-6-email-delivery-state
+          fetch-depth: 0
+      - run: python scripts/implement_issue_6.py
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/implement-issue-6.yml scripts/implement_issue_6.py
+          git add backend
+          git commit -m "feat: hacer trazable y reintentable el email de pedidos (#6)"
+          git push origin HEAD:issue-6-email-delivery-state
