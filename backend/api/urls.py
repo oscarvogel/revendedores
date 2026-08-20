@@ -37,7 +37,6 @@ urlpatterns = [
     path('bot/test-chat/', bot_views.test_chat, name='bot-test-chat'),
     path('consultar-precio/', views.consultar_precio, name='consultar_precio'),
     path('exportar-favoritos/', views.exportar_favoritos, name='exportar_favoritos'),
-    path('pedido-confirmado/<int:pedido_id>/', views.confirmar_pedido, name='pedido_confirmado'),
     path('dashboard/kpis/', views.dashboard_kpis, name='dashboard_kpis'),
     path('comprobantes/', views.comprobantes_cliente, name='comprobantes_cliente'),
     path('comprobantes/<str:numero_comprobante>/', views.detalle_comprobante, name='detalle_comprobante'),

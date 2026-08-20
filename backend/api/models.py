@@ -192,6 +192,7 @@ class Pedido(models.Model):
         related_name='pedidos',
     )
     cliente_snapshot = models.JSONField(default=dict, blank=True)
+    idempotency_key = models.CharField(max_length=64, null=True, blank=True, unique=True)
 
     def __str__(self):
         return f"Pedido #{self.id} - {self.user.username} ({self.get_estado_display()})"

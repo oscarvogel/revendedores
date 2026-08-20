@@ -1,7 +1,7 @@
 import threading
 import secrets
 import string
-from django.db import models
+from django.db import models, transaction, IntegrityError
 from django.contrib.auth import logout
 from django.db.models import Case, When, BooleanField
 
@@ -131,40 +131,6 @@ def enviar_emails_pedido(pedido):
         return False
 
 
-@action(detail=True, methods=['post'])
-def confirmar_pedido(self, request, pk=None):
-    pedido = self.get_object()
-    
-    if pedido.estado != 'PENDIENTE':
-        return Response(
-            {'error': 'Solo se pueden confirmar pedidos pendientes.'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    # Confirmar pedido
-    pedido.estado = 'CONFIRMADO'
-    pedido.save()
-
-    # Intentar enviar correo, pero no bloquear si falla
-    try:
-        email_enviado = enviar_emails_pedido(pedido)
-    except Exception as e:
-        # Loguear el error para monitoreo
-        logger.exception("Error al enviar correo para pedido %s", pedido.id)
-        email_enviado = False
-
-    # ✅ Respuesta clara: pedido OK, correo puede haber fallado
-    if email_enviado:
-        return Response({
-            'status': 'Pedido confirmado',
-            'message': 'Tu pedido ha sido confirmado y recibirás un correo con los detalles.'
-        })
-    else:
-        return Response({
-            'status': 'Pedido confirmado (sin correo)',
-            'message': 'Tu pedido fue confirmado, pero no pudimos enviarte un correo. Contáctanos si no recibes confirmación.',
-            'warning': 'El correo no se envió, pero el pedido es válido.'
-        }, status=status.HTTP_200_OK)  # ✅ 200 porque el pedido SÍ se procesó
 
 
 class PedidoViewSet(viewsets.ModelViewSet):
@@ -173,86 +139,98 @@ class PedidoViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'post', 'head', 'options']
 
     def get_queryset(self):
-        """Devuelve los pedidos del usuario actual ordenados por fecha de creación (más recientes primero)."""
         return Pedido.objects.filter(user=self.request.user).order_by('-fecha_creacion')
 
-    def perform_create(self, serializer):
-        """Asigna el usuario actual al crear un pedido."""
-        serializer.save(user=self.request.user)
+    def create(self, request, *args, **kwargs):
+        return Response(
+            {'error': 'Use el endpoint /api/pedidos/checkout/ para enviar pedidos.'},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
 
     def list(self, request, *args, **kwargs):
-        """Lista los pedidos del usuario con información adicional."""
         queryset = self.get_queryset()
-        
-        # Filtros opcionales
-        estado = request.query_params.get('estado', None)
+        estado = request.query_params.get('estado')
         if estado:
             queryset = queryset.filter(estado=estado)
-            
-        # Paginación
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
             return self.get_paginated_response(serializer.data)
-
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
+        return Response(self.get_serializer(queryset, many=True).data)
 
     @action(detail=False, methods=['get'])
     def mis_pedidos_resumen(self, request):
-        """Devuelve un resumen de los pedidos del usuario."""
         queryset = self.get_queryset()
-        
-        resumen = {
+        return Response({
             'total_pedidos': queryset.count(),
             'pedidos_pendientes': queryset.filter(estado='PENDIENTE').count(),
             'pedidos_confirmados': queryset.filter(estado='CONFIRMADO').count(),
             'pedidos_en_proceso': queryset.filter(estado='EN_PROCESO').count(),
             'pedidos_entregados': queryset.filter(estado='ENTREGADO').count(),
-            'ultimos_pedidos': self.get_serializer(queryset[:5], many=True).data
-        }
-        
-        return Response(resumen)
+            'ultimos_pedidos': self.get_serializer(queryset[:5], many=True).data,
+        })
 
-    @action(detail=True, methods=['post'])
-    def confirmar_pedido(self, request, pk=None):
-        pedido = self.get_object()
-        
-        if pedido.estado != 'PENDIENTE':
+    @action(detail=False, methods=['post'])
+    def checkout(self, request):
+        idempotency_key = (
+            request.headers.get('Idempotency-Key')
+            or request.data.get('idempotency_key')
+            or ''
+        ).strip()
+        if not idempotency_key:
             return Response(
-                {'error': 'Solo se pueden confirmar pedidos pendientes.'},
-                status=status.HTTP_400_BAD_REQUEST
+                {'error': 'Falta Idempotency-Key para procesar el pedido.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(idempotency_key) > 64:
+            return Response(
+                {'error': 'Idempotency-Key supera el máximo de 64 caracteres.'},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
+        existing = Pedido.objects.filter(
+            user=request.user,
+            idempotency_key=idempotency_key,
+        ).first()
+        if existing:
+            data = self.get_serializer(existing).data
+            data['idempotent_replay'] = True
+            return Response(data, status=status.HTTP_200_OK)
+
+        payload = request.data.copy()
+        payload.pop('idempotency_key', None)
         try:
-            # Confirmar pedido en la base de datos
-            pedido.estado = 'CONFIRMADO'
-            pedido.save()
-            
-            # ✅ Enviar emails en un thread separado (no bloqueante)
-            email_thread = threading.Thread(
-                target=enviar_emails_pedido_async, 
-                args=(pedido.id,),
-                daemon=True  # Se cierra cuando la app principal se cierra
-            )
-            email_thread.start()
-            
-            # ✅ Respuesta inmediata: el pedido fue confirmado, emails se envían en background
-            return Response({
-                'status': 'success',
-                'message': 'Tu pedido ha sido confirmado exitosamente. Recibirás un correo de confirmación en breve.',
-                'pedido_id': pedido.id,
-                'estado': 'CONFIRMADO'
-            }, status=status.HTTP_200_OK)
-            
-        except Exception as e:
-            # Error crítico: no se pudo confirmar el pedido
-            import logging
-            logging.error(f"Error crítico al confirmar pedido {pedido.id}: {e}")
-            return Response({
-                'error': 'No se pudo confirmar el pedido. Intenta nuevamente.',
-                'details': str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            with transaction.atomic():
+                serializer = self.get_serializer(data=payload)
+                serializer.is_valid(raise_exception=True)
+                pedido = serializer.save(
+                    user=request.user,
+                    idempotency_key=idempotency_key,
+                    estado='CONFIRMADO',
+                )
+                pedido_id = pedido.id
+                transaction.on_commit(
+                    lambda: threading.Thread(
+                        target=enviar_emails_pedido_async,
+                        args=(pedido_id,),
+                        daemon=True,
+                    ).start()
+                )
+        except IntegrityError:
+            existing = Pedido.objects.filter(
+                user=request.user,
+                idempotency_key=idempotency_key,
+            ).first()
+            if not existing:
+                raise
+            data = self.get_serializer(existing).data
+            data['idempotent_replay'] = True
+            return Response(data, status=status.HTTP_200_OK)
+
+        data = self.get_serializer(pedido).data
+        data['idempotent_replay'] = False
+        return Response(data, status=status.HTTP_201_CREATED)
+
 
 class BusquedaViewSet(viewsets.ModelViewSet):
     serializer_class = BusquedaSerializer
