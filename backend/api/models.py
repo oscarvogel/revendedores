@@ -193,6 +193,14 @@ class Pedido(models.Model):
     )
     cliente_snapshot = models.JSONField(default=dict, blank=True)
     idempotency_key = models.CharField(max_length=64, null=True, blank=True, unique=True)
+    email_cliente_estado = models.CharField(max_length=12, default='PENDIENTE')
+    email_cliente_intentos = models.PositiveIntegerField(default=0)
+    email_cliente_enviado_at = models.DateTimeField(null=True, blank=True)
+    email_cliente_ultimo_error = models.TextField(blank=True, default='')
+    email_ventas_estado = models.CharField(max_length=12, default='PENDIENTE')
+    email_ventas_intentos = models.PositiveIntegerField(default=0)
+    email_ventas_enviado_at = models.DateTimeField(null=True, blank=True)
+    email_ventas_ultimo_error = models.TextField(blank=True, default='')
 
     def __str__(self):
         return f"Pedido #{self.id} - {self.user.username} ({self.get_estado_display()})"

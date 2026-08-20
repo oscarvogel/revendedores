@@ -641,39 +641,22 @@ class StaffPedidosView(APIView):
 @api_view(['POST'])
 @permission_classes([IsAdminUser])
 def reenviar_email_pedido(request, pedido_id):
-    """Reenviar email de confirmación de un pedido."""
     try:
-        pedido = Pedido.objects.get(pk=pedido_id)
+        Pedido.objects.get(pk=pedido_id)
     except Pedido.DoesNotExist:
         return Response({'error': 'Pedido no encontrado'}, status=404)
-    
-    try:
-        # Importar la función de envío de emails
-        from .views import enviar_emails_pedido_async
-        import threading
-        
-        # Enviar emails en un thread separado
-        email_thread = threading.Thread(
-            target=enviar_emails_pedido_async, 
-            args=(pedido.id,),
-            daemon=True
-        )
-        email_thread.start()
-        
-        # Log para auditoría
-        print(f"📧 Staff {request.user.username} reenvió confirmación del pedido {pedido_id}")
-        
-        return Response({
-            'success': True,
-            'message': f'Email de confirmación reenviado para pedido #{pedido_id}'
-        })
-        
-    except Exception as e:
-        print(f"❌ Error al reenviar email del pedido {pedido_id}: {e}")
-        return Response({
-            'error': 'Error al reenviar email de confirmación',
-            'details': str(e)
-        }, status=500)
+
+    destino = request.data.get('destino')
+    destinos = (destino,) if destino in {'cliente', 'ventas'} else ('cliente', 'ventas')
+    from .services.notificaciones_pedido import enviar_notificaciones_pedido
+    resultados = enviar_notificaciones_pedido(pedido_id, destinos=destinos)
+    success = all(item['estado'] == 'ENVIADO' for item in resultados.values())
+    return Response({
+        'success': success,
+        'pedido_id': pedido_id,
+        'resultados': resultados,
+        'message': 'Notificación procesada; revise el estado por destinatario.',
+    }, status=200)
 
 
 @api_view(['GET'])

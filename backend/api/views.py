@@ -45,90 +45,15 @@ def _build_short_code(length=8):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 def enviar_emails_pedido_async(pedido_id):
-    """Envía los correos de confirmación de pedido de forma asíncrona."""
-    try:
-        # Importar aquí para evitar problemas de sincronización con la DB
-        from .models import Pedido
-        pedido = Pedido.objects.get(id=pedido_id)
-        
-        print(f"📧 [THREAD] Iniciando envío de correos para pedido {pedido.id}")
-        
-        # Email para el cliente
-        print(f"📬 [THREAD] Enviando correo al cliente: {pedido.user.email}")
-        subject_cliente = f"Confirmación de tu Pedido #{pedido.id}"
-        html_message_cliente = render_to_string('emails/confirmacion_pedido_cliente.html', {'pedido': pedido})
-        plain_message_cliente = f"Tu pedido #{pedido.id} ha sido confirmado. Total: ${pedido.total}"
-        send_mail(
-            subject_cliente,
-            plain_message_cliente,
-            settings.DEFAULT_FROM_EMAIL,
-            [pedido.user.email],
-            html_message=html_message_cliente,
-            fail_silently=False,
-        )
-        print(f"✅ [THREAD] Correo al cliente enviado")
-
-        # Email para el vendedor
-        print(f"📬 [THREAD] Enviando correo al vendedor: {settings.EMAIL_RECIPIENT}")
-        subject_vendedor = f"Nuevo Pedido Recibido #{pedido.id} de {pedido.user.username}"
-        html_message_vendedor = render_to_string('emails/notificacion_pedido_vendedor.html', {'pedido': pedido})
-        plain_message_vendedor = f"Se ha recibido un nuevo pedido de {pedido.user.username}. Total: ${pedido.total}"
-        send_mail(
-            subject_vendedor,
-            plain_message_vendedor,
-            settings.DEFAULT_FROM_EMAIL,
-            [settings.EMAIL_RECIPIENT],
-            html_message=html_message_vendedor,
-            fail_silently=False,
-        )
-        print(f"✅ [THREAD] Correo al vendedor enviado")
-        print(f"🎉 [THREAD] Todos los correos enviados exitosamente para pedido {pedido.id}")
-        
-    except Exception as e:
-        print(f"❌ [THREAD] Error al enviar correos para pedido {pedido_id}: {e}")
-        logger.exception("Error en thread de emails para pedido %s", pedido_id)
+    # Compatibilidad temporal para llamadas externas: ya no crea threads.
+    from .services.notificaciones_pedido import enviar_notificaciones_pedido
+    return enviar_notificaciones_pedido(pedido_id)
 
 
 def enviar_emails_pedido(pedido):
-    """Envía los correos de confirmación de pedido."""
-    try:
-        print(f"📧 Iniciando envío de correos para pedido {pedido.id}")
-        
-        # Email para el cliente
-        print(f"📬 Enviando correo al cliente: {pedido.user.email}")
-        subject_cliente = f"Confirmación de tu Pedido #{pedido.id}"
-        html_message_cliente = render_to_string('emails/confirmacion_pedido_cliente.html', {'pedido': pedido})
-        plain_message_cliente = f"Tu pedido #{pedido.id} ha sido confirmado. Total: ${pedido.total}"
-        send_mail(
-            subject_cliente,
-            plain_message_cliente,
-            settings.DEFAULT_FROM_EMAIL,
-            [pedido.user.email],
-            html_message=html_message_cliente,
-            fail_silently=False,
-        )
-        print(f"✅ Correo al cliente enviado")
-
-        # Email para el vendedor
-        print(f"📬 Enviando correo al vendedor: {settings.EMAIL_RECIPIENT}")
-        subject_vendedor = f"Nuevo Pedido Recibido #{pedido.id} de {pedido.user.username}"
-        html_message_vendedor = render_to_string('emails/notificacion_pedido_vendedor.html', {'pedido': pedido})
-        plain_message_vendedor = f"Se ha recibido un nuevo pedido de {pedido.user.username}. Total: ${pedido.total}"
-        send_mail(
-            subject_vendedor,
-            plain_message_vendedor,
-            settings.DEFAULT_FROM_EMAIL,
-            [settings.EMAIL_RECIPIENT],
-            html_message=html_message_vendedor,
-            fail_silently=False,
-        )
-        print(f"✅ Correo al vendedor enviado")
-        print(f"🎉 Todos los correos enviados exitosamente para pedido {pedido.id}")
-        return True
-    except Exception as e:
-        print(f"❌ Error al enviar correos para pedido {pedido.id}: {e}")
-        logger.exception("Error al enviar correos para pedido %s", pedido.id)
-        return False
+    from .services.notificaciones_pedido import enviar_notificaciones_pedido
+    resultado = enviar_notificaciones_pedido(pedido.id)
+    return all(item['estado'] == 'ENVIADO' for item in resultado.values())
 
 
 
@@ -208,14 +133,6 @@ class PedidoViewSet(viewsets.ModelViewSet):
                     idempotency_key=idempotency_key,
                     estado='CONFIRMADO',
                 )
-                pedido_id = pedido.id
-                transaction.on_commit(
-                    lambda: threading.Thread(
-                        target=enviar_emails_pedido_async,
-                        args=(pedido_id,),
-                        daemon=True,
-                    ).start()
-                )
         except IntegrityError:
             existing = Pedido.objects.filter(
                 user=request.user,
@@ -227,8 +144,12 @@ class PedidoViewSet(viewsets.ModelViewSet):
             data['idempotent_replay'] = True
             return Response(data, status=status.HTTP_200_OK)
 
+        from .services.notificaciones_pedido import enviar_notificaciones_pedido
+        notificaciones = enviar_notificaciones_pedido(pedido.id)
+        pedido.refresh_from_db()
         data = self.get_serializer(pedido).data
         data['idempotent_replay'] = False
+        data['notificaciones'] = notificaciones
         return Response(data, status=status.HTTP_201_CREATED)
 
 
