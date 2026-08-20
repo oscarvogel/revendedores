@@ -11,6 +11,7 @@ from django.db.models import Count
 
 from .models import Articulos, BonificacionCliente, Cliente, FormaPago, Favorito, Busqueda, Pedido, PedidoItem, ExportEvent
 from .constants import CLAVE_LEN_THRESHOLD
+from .services.cantidades import validar_cantidad_articulo
 from django.conf import settings
 
 class PedidoItemSerializer(serializers.ModelSerializer):
@@ -21,6 +22,16 @@ class PedidoItemSerializer(serializers.ModelSerializer):
         fields = ['id', 'articulo', 'articulo_detalle', 'cantidad', 'precio_unitario', 'subtotal']
         read_only_fields = ('subtotal',)
     
+    def validate(self, attrs):
+        articulo = attrs.get('articulo')
+        cantidad = attrs.get('cantidad')
+        if articulo is not None and cantidad is not None:
+            try:
+                attrs['cantidad'] = validar_cantidad_articulo(articulo, cantidad)
+            except serializers.ValidationError as exc:
+                raise serializers.ValidationError({'cantidad': exc.detail}) from exc
+        return attrs
+
     def get_articulo_detalle(self, obj):
         """Devuelve información detallada del artículo."""
         return {
@@ -125,23 +136,17 @@ class FavoritoSerializer(serializers.ModelSerializer):
 class BaseSerializer(serializers.ModelSerializer):
     """
     Serializer base común para todos los modelos.
-    Puedes agregar aquí comportamientos globales:
-    - Campos automáticos (ej: timestamps, usuario)
-    - Validaciones comunes
-    - Métodos to_representation/to_internal_value
+    Puedes agregar comportamientos globales aquí.
     """
     def create(self, validated_data):
-        # Puedes inyectar lógica común aquí (ej: usuario actual)
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
-        # Lógica común en actualizaciones
         return super().update(instance, validated_data)
     
 
 class CookieTokenRefreshView(TokenRefreshView):
     def post(self, request, *args, **kwargs):
-        # Leer el refresh_token de la cookie
         refresh_token = request.COOKIES.get('refresh_token')
 
         if not refresh_token:
@@ -150,36 +155,27 @@ class CookieTokenRefreshView(TokenRefreshView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        # Inyectar el token en el cuerpo de la solicitud
         request.data['refresh'] = refresh_token
-
-        # Llamar al comportamiento original
         response = super().post(request, *args, **kwargs)
 
         if response.status_code == 200:
-            # Opcional: guardar el nuevo access_token en una cookie
             access_token = response.data['access']
             response.set_cookie(
                 key='access_token',
                 value=access_token,
                 httponly=True,
-                secure=False,  # Cambia a True en producción (HTTPS)
-                samesite='Lax',  # 'None' si es cross-origin con HTTPS
+                secure=False,
+                samesite='Lax',
                 path='/',
-                max_age=60 * 15  # 15 minutos
+                max_age=60 * 15
             )
         return response
         
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
-        # Primero, autenticar y obtener los tokens (como hace el padre)
         data = super().validate(attrs)
-
-        # Ahora, agregar información del usuario
         user = self.user
-
-        # Obtener IP y User-Agent desde la solicitud
         request = self.context['request']
         x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
         if x_forwarded_for:
@@ -188,16 +184,13 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             ip = request.META.get('REMOTE_ADDR')
 
         user_agent = request.META.get('HTTP_USER_AGENT', '')
-
-        # Buscar cliente asociado
         cliente = None
         try:
             cliente = user.cliente
         except:
             cliente = None
 
-        # 👉 Crear el registro de sesión
-        from .models import RegistroSesion  # Evitar importación circular
+        from .models import RegistroSesion
         sesion = RegistroSesion.objects.create(
             usuario=user,
             cliente=cliente,
@@ -205,7 +198,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             user_agent=user_agent
         )
 
-        # Agregar datos del usuario y el session_id
         data['user'] = {
             'id': user.id,
             'username': user.username,
@@ -215,8 +207,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             'is_staff': user.is_staff,
             'is_superuser': user.is_superuser,
         }
-        data['session_id'] = sesion.id  # 🔥 Añadimos el ID de la sesión
-
+        data['session_id'] = sesion.id
         return data
 
 class ArticuloSerializer(BaseSerializer):
@@ -226,25 +217,13 @@ class ArticuloSerializer(BaseSerializer):
 
     class Meta:
         model = Articulos
-        fields = '__all__'  # o lista de campos, incluyendo 'precio_lista' y 'mostrar_precio'
+        fields = '__all__'
 
     def get_imagen(self, obj):
-        """
-        Devuelve la URL absoluta de la imagen, o None si no existe.
-        Si el artículo no tiene imagen, busca la imagen del artículo padre.
-        Por ejemplo: si 065.0301 no tiene imagen, busca en 065.030
-        """
         request = self.context.get('request')
-        
-        # Si el artículo tiene imagen propia, devolverla
         if obj.imagen:
             return request.build_absolute_uri(obj.imagen.url) if request else obj.imagen.url
-        
-        # Intentar obtener la imagen del artículo padre
         clave = obj.clave
-        
-        # Estrategia 1: Si la clave tiene más de CLAVE_LEN_THRESHOLD caracteres, buscar el padre con los primeros N
-        # Ej: 065.0301 -> 065.030
         if len(clave) > CLAVE_LEN_THRESHOLD:
             clave_padre = clave[:CLAVE_LEN_THRESHOLD]
             try:
@@ -253,11 +232,8 @@ class ArticuloSerializer(BaseSerializer):
                     return request.build_absolute_uri(articulo_padre.imagen.url) if request else articulo_padre.imagen.url
             except Articulos.DoesNotExist:
                 pass
-        
-        # Estrategia 2: Buscar artículos con clave similar (sin el último dígito) que tengan imagen
-        # Ej: 065.0301 -> buscar 065.030*
         if len(clave) > 4:
-            clave_base = clave[:-1]  # Quitar último carácter
+            clave_base = clave[:-1]
             try:
                 articulo_padre = Articulos.objects.filter(
                     empresa_id=settings.EMPRESA_ID,
@@ -268,63 +244,35 @@ class ArticuloSerializer(BaseSerializer):
                     return request.build_absolute_uri(articulo_padre.imagen.url) if request else articulo_padre.imagen.url
             except Exception:
                 pass
-        
         return None
     
     def get_mostrar_precio(self, obj):
-        """
-        Determina si se debe mostrar el precio basado en:
-        1. Si el usuario es staff (siempre mostrar)
-        2. Si el artículo está en favoritos del usuario
-        """
         request = self.context.get('request')
         if not request or not request.user.is_authenticated:
             return False
-        
-        # Si es staff, siempre mostrar precio
         if request.user.is_staff:
             return True
-        
-        # Para usuarios normales, solo mostrar si está en favoritos
         return Favorito.objects.filter(user=request.user, articulo=obj).exists()
         
     def get_precio_lista(self, obj):
-        """
-        Retorna el precio solo si se debe mostrar según las reglas de negocio
-        """
         request = self.context.get('request')
         if not request or not request.user.is_authenticated:
             return None
-        
-        # Verificar si se debe mostrar el precio
         if not self.get_mostrar_precio(obj):
             return None
-            
-        # Si se debe mostrar, calcular el precio
         flete = 0
-        
         try:
             cliente = request.user.cliente
             lista_precio = cliente.lista_precio
-            
-            # Obtener filtros del contexto
-            modalidad = self.context.get('modalidad', 'retira')  # 'retira' o 'reparto'
-            con_impuestos = self.context.get('con_impuestos', True)  # True por defecto
-            
-            # === 1. Obtener precio base según lista ===
+            modalidad = self.context.get('modalidad', 'retira')
+            con_impuestos = self.context.get('con_impuestos', True)
             if lista_precio == '1':
                 precio_base = obj.pblret1 if modalidad == 'retira' else obj.pblrep1
             elif lista_precio == '4':
                 precio_base = obj.pblret4 if modalidad == 'retira' else obj.pblrep4
             else:
-                precio_base = obj.pblret1  # default
-                
-            # === 2. Ajustar por impuestos ===
-            # precio_sin_iva = precio_base / (1 + obj.iva / 100) if obj.iva else precio_base
-            # precio_final = precio_sin_iva if not con_impuestos else precio_base
+                precio_base = obj.pblret1
             precio_final = precio_base
-            
-            # === 3. Aplicar flete ===
             if modalidad == 'reparto':
                 if obj.tiporeparto == 'T':
                     flete = cliente.codigo_localidad.fletetn1 if cliente.lista_precio == '1' else cliente.codigo_localidad.fletetn4
@@ -332,38 +280,23 @@ class ArticuloSerializer(BaseSerializer):
                 elif obj.tiporeparto == 'P':
                     flete = cliente.codigo_localidad.fletep1 if cliente.lista_precio == '1' else cliente.codigo_localidad.fletep4
                     flete = precio_final * flete / 100
-            # flete *= (1 + obj.iva / 100)
-            
-            # === 4. Aplicar descuentos ===
-
             forma_pago_id = self.context.get('condicion_pago') or '00'
             forma_pago = FormaPago.objects.get(id=forma_pago_id)
             bonificacion = BonificacionCliente.objects.filter(cliente=cliente, desde_articulo__lte=obj.clave, hasta_articulo__gte=obj.clave).first()
-            
             if bonificacion:
-                porcentaje_bonificacion = bonificacion.bonificacion
-                precio_final *= (1 - porcentaje_bonificacion / 100)
-            
+                precio_final *= (1 - bonificacion.bonificacion / 100)
             if forma_pago.descuento > 0:
                 precio_final *= (1 - forma_pago.descuento / 100)
             if forma_pago.punitorio > 0:
                 precio_final *= (1 + forma_pago.punitorio / 100)
-
             precio_final += flete if flete else 0
-            
-            # print(f"Cliente: {cliente}, Lista: {lista_precio}, Modalidad: {modalidad}, Precio Base: {precio_base}, Flete: {flete}, Precio Final antes de impuestos: {precio_final} Condicion de pago: {forma_pago.id} Desc: {forma_pago.descuento} Punitorio: {forma_pago.punitorio}")
-            # === 5. Redondear a 2 decimales ===            
             if con_impuestos:
                 precio_final *= (1 + obj.iva / 100)
-            
             return round(precio_final, 2)
-
         except (Cliente.DoesNotExist, FormaPago.DoesNotExist):
-            # Si es staff pero no tiene cliente, retornar precio base
             if request.user.is_staff:
                 return obj.pblret1
-            return None        
-        
+            return None
 
 class ArticuloStaffSerializer(serializers.ModelSerializer):
     favoritos_count = serializers.IntegerField(read_only=True)
@@ -375,4 +308,4 @@ class ArticuloStaffSerializer(serializers.ModelSerializer):
 class FormaPagoSerializer(serializers.ModelSerializer):
     class Meta:
         model = FormaPago
-        fields = ['id', 'nombre', 'lista', 'punitorio', 'descuento']        
+        fields = ['id', 'nombre', 'lista', 'punitorio', 'descuento']

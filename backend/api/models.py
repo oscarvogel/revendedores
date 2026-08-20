@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
@@ -203,7 +204,7 @@ class Pedido(models.Model):
 class PedidoItem(models.Model):
     pedido = models.ForeignKey(Pedido, on_delete=models.CASCADE, related_name='items')
     articulo = models.ForeignKey(Articulos, on_delete=models.CASCADE)
-    cantidad = models.PositiveIntegerField(default=1)
+    cantidad = models.DecimalField(max_digits=12, decimal_places=3, default=1)
     precio_unitario = models.DecimalField(max_digits=10, decimal_places=2)
     subtotal = models.DecimalField(max_digits=12, decimal_places=2)
 
@@ -211,6 +212,15 @@ class PedidoItem(models.Model):
         """Calcula el subtotal antes de guardar."""
         self.subtotal = self.precio_unitario * self.cantidad
         super().save(*args, **kwargs)
+
+    def calcular_peso(self):
+        """Calcula el peso respetando cantidades en m²/cajas."""
+        cantidad = Decimal(str(self.cantidad))
+        peso_unitario = Decimal(str(self.articulo.peso or 0))
+        mts2 = Decimal(str(self.articulo.mts2 or 0))
+        if (self.articulo.campoa1 or '').lower() == 'a' and mts2 > 0:
+            return (cantidad / mts2) * peso_unitario
+        return cantidad * peso_unitario
 
     def __str__(self):
         return f"{self.cantidad} x {self.articulo.nombre} en Pedido #{self.pedido.id}"        
