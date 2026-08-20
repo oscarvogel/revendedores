@@ -9,6 +9,7 @@ from rest_framework.test import APIClient
 from api.models import Articulos, Cliente, FormaPago, Localidades, Pedido
 
 
+# El checkout debe ser seguro ante doble envío y reintentos con la misma clave.
 class CheckoutIdempotencyTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username='checkout', password='test')
