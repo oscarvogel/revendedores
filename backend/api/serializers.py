@@ -57,8 +57,8 @@ class PedidoSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Pedido
-        fields = ['id', 'user', 'usuario_nombre', 'fecha_creacion', 'estado', 'estado_display', 'total', 'modalidad', 'con_impuestos', 'condicion_pago', 'cliente_snapshot', 'items']
-        read_only_fields = ('user', 'fecha_creacion', 'total', 'estado_display', 'usuario_nombre', 'cliente_snapshot')
+        fields = ['id', 'user', 'usuario_nombre', 'fecha_creacion', 'estado', 'estado_display', 'total', 'modalidad', 'con_impuestos', 'condicion_pago', 'cliente_snapshot', 'idempotency_key', 'items']
+        read_only_fields = ('user', 'fecha_creacion', 'total', 'estado_display', 'usuario_nombre', 'cliente_snapshot', 'idempotency_key')
 
     def create(self, validated_data):
         items_data = validated_data.pop('items')
