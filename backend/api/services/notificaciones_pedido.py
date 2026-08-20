@@ -1,3 +1,5 @@
+"""Envío de notificaciones de pedidos con estado persistente por destinatario."""
+
 import logging
 
 from django.conf import settings
