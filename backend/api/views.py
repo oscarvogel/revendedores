@@ -1,6 +1,7 @@
 import threading
 import secrets
 import string
+import re
 from django.db import models, transaction, IntegrityError
 from django.contrib.auth import logout
 from django.db.models import Case, When, BooleanField
@@ -30,6 +31,12 @@ from .serializers import ArticuloSerializer, FormaPagoSerializer, FavoritoSerial
 from .constants import TIPOS_COMPROBANTE
 from .fechas import esta_vencido, formatear_fecha
 from .services.precios import calcular_precio_articulo
+from .services.erp_documents import (
+    InvoiceFiscalError,
+    InvoiceNotFound,
+    InvoiceServiceUnavailable,
+    download_invoice_pdf,
+)
 from backend.BaseViewSet import BaseAppModelViewSet
 from rest_framework import viewsets
 from rest_framework.decorators import action
@@ -1206,6 +1213,49 @@ def comprobantes_cliente(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def descargar_comprobante_pdf(request, tipo, numero_comprobante):
+    """Return the existing ERP-generated PDF for one of the authenticated customer's invoices."""
+    document_type = str(tipo or '').strip().upper()
+    invoice_number = str(numero_comprobante or '').strip()
+    if document_type not in {'F', 'C', 'D'} or not re.fullmatch(r'\d{12}', invoice_number):
+        return Response({'message': 'Comprobante no encontrado.'}, status=404)
+
+    try:
+        cliente = Cliente.objects.get(user=request.user)
+    except Cliente.DoesNotExist:
+        return Response({'message': 'Comprobante no encontrado.'}, status=404)
+
+    try:
+        content = download_invoice_pdf(
+            company_id=settings.EMPRESA_ID,
+            customer_code=cliente.numero_cliente,
+            document_type=document_type,
+            invoice_number=invoice_number,
+        )
+    except InvoiceNotFound:
+        return Response({'message': 'Comprobante no encontrado.'}, status=404)
+    except InvoiceFiscalError:
+        return Response(
+            {'message': 'La factura no se puede generar porque faltan datos fiscales o autorización.'},
+            status=422,
+        )
+    except InvoiceServiceUnavailable:
+        return Response(
+            {'message': 'El servicio de impresión no está disponible. Intentá nuevamente más tarde.'},
+            status=503,
+        )
+
+    response = HttpResponse(content, content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="comprobante-{document_type}-{invoice_number}.pdf"'
+    response['Cache-Control'] = 'private, no-store, max-age=0'
+    response['Pragma'] = 'no-cache'
+    response['Expires'] = '0'
+    response['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def detalle_comprobante(request, numero_comprobante):
     """
     Endpoint para obtener el detalle de un comprobante específico.
@@ -1409,3 +1459,4 @@ def detalle_comprobante(request, numero_comprobante):
             'error': 'Error al obtener detalle del comprobante',
             'details': str(e)
         }, status=500)
+

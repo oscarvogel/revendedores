@@ -58,3 +58,12 @@ export const getDetalleComprobante = async (numeroComprobante) => {
     throw error
   }
 }
+
+/** Descarga el PDF generado por FASA ERP para el comprobante del cliente. */
+export const descargarComprobante = async (tipo, numeroComprobante) => {
+  return api.get(`api/comprobantes/${encodeURIComponent(tipo)}/${encodeURIComponent(numeroComprobante)}/pdf/`, {
+    responseType: 'blob',
+    headers: { Accept: 'application/pdf' },
+  })
+}
+

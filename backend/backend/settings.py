@@ -209,6 +209,11 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 # Empresa activa (filtrar artículos por `empresa_id`)
 EMPRESA_ID = config('EMPRESA_ID', default=1, cast=int)
 
+# Credenciales exclusivamente backend para la integración de impresión ERP.
+ERP_DOCUMENT_RENDER_URL = config('ERP_DOCUMENT_RENDER_URL', default='')
+ERP_DOCUMENT_API_TOKEN = config('ERP_DOCUMENT_API_TOKEN', default='')
+ERP_DOCUMENT_TIMEOUT = config('ERP_DOCUMENT_TIMEOUT', default=15, cast=int)
+
 # Configuración de Email
 EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.smtp.EmailBackend')
 EMAIL_HOST = config('EMAIL_HOST', default='mail.ferreteriaavenida.com.ar')
@@ -293,3 +298,4 @@ LOGGING = {
         },
     },
 }
+

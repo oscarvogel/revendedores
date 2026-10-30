@@ -190,6 +190,22 @@
                   <i class="fas fa-eye mr-1"></i>
                   Ver Detalle
                 </button>
+                <button
+                  v-if="['F', 'C', 'D'].includes(comprobante.codigo)"
+                  @click="descargarFactura(comprobante)"
+                  :disabled="descargando === comprobanteKey(comprobante)"
+                  class="ml-3 text-red-600 hover:text-red-900 transition-colors disabled:opacity-50 disabled:cursor-wait"
+                  :aria-busy="descargando === comprobanteKey(comprobante)"
+                  :title="comprobante.codigo === 'F' ? 'Descargar factura PDF' : 'Descargar comprobante PDF'"
+                >
+                  <i class="fas fa-download mr-1" :class="{ 'animate-pulse': descargando === comprobanteKey(comprobante) }"></i>
+                  {{ descargando === comprobanteKey(comprobante) ? 'Descargando…' : (comprobante.codigo === 'F' ? 'Descargar factura' : 'Descargar comprobante') }}
+                </button>
+                <p
+                  v-if="errorDescarga && errorDescargaKey === comprobanteKey(comprobante)"
+                  class="mt-1 whitespace-normal text-xs text-red-600"
+                  role="alert"
+                >{{ errorDescarga }}</p>
               </td>
             </tr>
           </tbody>
@@ -308,7 +324,7 @@
 
 <script setup>
 import { ref, onMounted, computed } from 'vue'
-import { getComprobantesCliente } from '@/services/dashboard'
+import { descargarComprobante, getComprobantesCliente } from '@/services/dashboard'
 import DetalleComprobanteModal from '@/components/DetalleComprobanteModal.vue'
 import LoadingState from '@/components/ui/LoadingState.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
@@ -318,6 +334,9 @@ const comprobantes = ref([])
 const loading = ref(false)
 const error = ref(false)
 const errorMessage = ref('')
+const descargando = ref('')
+const errorDescarga = ref('')
+const errorDescargaKey = ref('')
 
 // Modal de detalle
 const mostrarModal = ref(false)
@@ -393,6 +412,37 @@ const getEstadoClass = (estado) => {
   return estado === 'Vencido' 
     ? 'bg-red-100 text-red-800' 
     : 'bg-green-100 text-green-800'
+}
+
+const comprobanteKey = (comprobante) => `${comprobante.codigo}:${comprobante.numero}`
+
+const descargarFactura = async (comprobante) => {
+  const key = comprobanteKey(comprobante)
+  descargando.value = key
+  errorDescarga.value = ''
+  errorDescargaKey.value = key
+
+  try {
+    const response = await descargarComprobante(comprobante.codigo, comprobante.numero)
+    const url = URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `comprobante-${comprobante.codigo}-${comprobante.numero}.pdf`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch (err) {
+    const status = err.response?.status
+    errorDescarga.value = status === 404
+      ? 'No se encontró el comprobante solicitado.'
+      : status === 422
+        ? 'El comprobante no puede generarse por datos fiscales incompletos o sin autorización.'
+        : 'No se pudo descargar el comprobante. Intentá nuevamente más tarde.'
+    if (window.Toast) window.Toast.show(errorDescarga.value, 'error', 7000)
+  } finally {
+    descargando.value = ''
+  }
 }
 
 // Función para cargar comprobantes
@@ -507,3 +557,4 @@ onMounted(() => {
   loadComprobantes()
 })
 </script>
+
