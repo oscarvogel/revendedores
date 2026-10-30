@@ -1,114 +1,44 @@
 # Deploy de Prueba - Docker
 
-Entorno de prueba aislado con Docker en `192.168.0.195` (fasa_195).
+Entorno aislado de Revendedores en `fasa_189` (`192.168.0.189`). Usa su propio proyecto Docker y volumen de MySQL. El host publica únicamente el frontend en el puerto `15173`; backend y base de datos sólo se comunican en la red privada del stack.
 
-## Servicios y Puertos
-
-| Servicio | URL | Descripcion |
-|----------|-----|-------------|
-| Frontend | http://192.168.0.195:15173 | Vue SPA (nginx) |
-| Backend API | http://192.168.0.195:18089/api/ | Django REST |
-| Backend Admin | http://192.168.0.195:18089/admin/ | Django Admin |
-| MySQL | 192.168.0.195:3307 | Base de datos |
-
-## Prerrequisitos
-
-- Docker >= 20.10
-- Docker Compose >= 2.0
-- Copiar la carpeta `docker/` al servidor
+## Conexión SSH
 
 ```bash
-# En el servidor (192.168.0.195)
-sudo apt update && sudo apt install -y docker.io docker-compose-plugin
-sudo usermod -aG docker $USER
-# Cerrar y abrir sesion para aplicar grupo docker
+ssh fasa_189
 ```
 
-## Levantar
+## Servicios
+
+| Servicio | Acceso | Descripción |
+|----------|--------|-------------|
+| Frontend | http://192.168.0.189:15173 | Vue SPA y proxy para `/api/` y `/admin/` |
+| Backend API | http://192.168.0.189:15173/api/ | Django REST, vía Nginx interno |
+| Backend Admin | http://192.168.0.189:15173/admin/ | Django Admin, vía Nginx interno |
+| MySQL | Sólo red Docker (`mysql:3306`) | Base de pruebas aislada, sin puerto publicado |
+
+## Requisitos
+
+- Docker y Docker Compose instalados en `fasa_189`.
+- Archivo `/home/fasa/revendedores-staging/docker/.env.docker` con las variables de staging. No versionar ese archivo ni copiar secretos de producción.
+- Los puertos `15173` libres en el host.
+
+## Levantar o actualizar
 
 ```bash
-cd /var/www/html/reventa/docker
-
-# Construir y levantar
-sudo docker compose up -d --build
-
-# Verificar que todos esten corriendo
-sudo docker compose ps
+cd /home/fasa/revendedores-staging/docker
+sudo docker compose -p revendedores-staging -f docker-compose.staging-189.yml up -d --build
+sudo docker compose -p revendedores-staging -f docker-compose.staging-189.yml exec -T backend python manage.py migrate --noinput
+sudo docker compose -p revendedores-staging -f docker-compose.staging-189.yml ps
 ```
 
-## Primera vez - Inicializar base de datos
+Abrir **http://192.168.0.189:15173**. El frontend usa el proxy interno para las llamadas al backend; MySQL no queda expuesto al host.
+
+## Logs y parada
 
 ```bash
-# Crear tablas
-sudo docker compose exec backend python manage.py migrate
-
-# Crear superusuario
-sudo docker compose exec backend python manage.py createsuperuser
-
-# Cargar datos iniciales (si existe el comando)
-sudo docker compose exec backend python manage.py loaddata initial_data
+sudo docker compose -p revendedores-staging -f docker-compose.staging-189.yml logs -f
+sudo docker compose -p revendedores-staging -f docker-compose.staging-189.yml down
 ```
 
-## Acceder
-
-Abrir en el navegador: **http://192.168.0.195:15173**
-
-- El frontend conecta la API automaticamente via nginx proxy
-- Login con el superusuario creado arriba
-- Django Admin: http://192.168.0.195:18089/admin/
-
-## Ver Logs
-
-```bash
-# Todos los servicios
-sudo docker compose logs -f
-
-# Solo backend
-sudo docker compose logs -f backend
-
-# Solo frontend
-sudo docker compose logs -f frontend
-
-# Solo MySQL
-sudo docker compose logs -f mysql
-```
-
-## Parar
-
-```bash
-sudo docker compose down
-```
-
-## Parar y borrar datos
-
-```bash
-sudo docker compose down -v
-```
-
-## Reconstruir desde cero
-
-```bash
-sudo docker compose down -v
-sudo docker compose up -d --build
-sudo docker compose exec backend python manage.py migrate
-sudo docker compose exec backend python manage.py createsuperuser
-``>
-
-## Archivos
-
-```
-docker/
-  Dockerfile.backend      # Python 3.11 + gunicorn
-  Dockerfile.frontend     # Node 20 build + nginx:alpine
-  docker-compose.yml      # Orquestacion de servicios
-  .env.docker             # Variables de entorno para Docker
-  nginx/
-    default.conf          # Config nginx (SPA + proxy API)
-```
-
-## Notas
-
-- La base de datos Docker es **aislada** (no afecta produccion)
-- El email esta deshabilitado (consola) en este entorno
-- Los puertos no conflictuan con produccion (80/443, 8088, 3306)
-- Los archivos media se guardan en un volumen Docker persistente
+`down` preserva el volumen de la base. No usar `down -v` salvo que se quiera borrar la base de pruebas.

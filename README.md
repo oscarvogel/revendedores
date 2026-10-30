@@ -82,52 +82,28 @@ npm run build         # Build de produccion
 
 Ver [deploy_prueba.md](deploy_prueba.md) para instrucciones completas.
 
-Resumen rapido:
+Resumen rápido:
 
 ```bash
-cd docker
-docker compose up -d --build
-docker compose exec backend python manage.py migrate
-docker compose exec backend python manage.py createsuperuser
+cd /home/fasa/revendedores-staging/docker
+sudo docker compose -p revendedores-staging -f docker-compose.staging-189.yml up -d --build
+sudo docker compose -p revendedores-staging -f docker-compose.staging-189.yml exec -T backend python manage.py migrate --noinput
 ```
 
-Acceso: http://192.168.0.195:15173
+Acceso: http://192.168.0.189:15173
 
-| Servicio | Puerto |
+| Servicio | Acceso |
 |----------|--------|
-| Frontend (nginx) | 15173 |
-| Backend (gunicorn) | 18089 |
-| MySQL | 3307 |
+| Frontend y proxy API | 15173 |
+| Backend y MySQL | Sólo red privada de Docker |
+## Deploy en Producción
 
-## Deploy en Produccion
-
-**Servidor:** `192.168.0.195` (fg-ubuntu)
+**Servidor:** `fasa_189` (`192.168.0.189`)
 **Dominio:** https://ventas.ferreteriaavenida.com.ar
 
-- Backend: gunicorn en `127.0.0.1:8088`, gestionado por systemd (`reventa.service`)
-- Frontend: archivos estaticos compilados servidos por nginx
-- Base de datos: MySQL en `192.168.0.150`
-- SSL: Let's Encrypt via certbot
-
-### Pasos de deploy
-
-```bash
-# Copiar codigo al servidor
-rsync -avz --exclude node_modules --exclude .venv --exclude dist \
-  backend/ frontend/ fasa_195:/var/www/html/reventa/
-
-# SSH al servidor
-ssh fasa_195
-
-# Migraciones y restart
-cd /var/www/html/reventa/backend
-source ../venv/bin/activate
-python manage.py migrate
-sudo systemctl restart reventa.service
-```
-
-Ver `deploy.yml` para detalles completos del deploy.
-
+- Aplicación administrada con Coolify.
+- Seguir el procedimiento vigente en [deploy_production.md](deploy_production.md).
+- Los pasos manuales del servidor anterior no aplican.
 ## Arquitectura de Auth
 
 1. Login: POST `/api/token/` con usuario + password
@@ -152,3 +128,4 @@ Ver `backend/.env` para la referencia completa. Variables principales:
 ## Licencia
 
 Uso interno - Ferreteria Avenida SA
+

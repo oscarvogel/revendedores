@@ -27,7 +27,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DEBUG = config('DEBUG', default=False, cast=bool)
 SECRET_KEY = config('SECRET_KEY')
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '192.168.0.200', '192.168.0.195', 'ventas.ferreteriaavenida.com.ar', '186.5.245.12']
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '192.168.0.189', '192.168.0.200', '192.168.0.195', 'ventas.ferreteriaavenida.com.ar', '186.5.245.12']
 
 
 # Application definition
