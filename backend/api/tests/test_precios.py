@@ -253,6 +253,60 @@ class PrecioServiceTests(TestCase):
         )
         self.assertIsNone(_aplicar_formula_precio(Decimal("100.00"), "/0"))
 
+    def test_calcular_precio_articulo_rebuilds_variant_from_erp_root_and_formula(self):
+        self.cliente.lista_precio = "4"
+        self.cliente.save(update_fields=["lista_precio"])
+        self.articulo.clave = "08001171"
+        self.articulo.formula = "*4.50"
+        self.articulo.pblret4 = Decimal("254268.84")
+        self.articulo.pblrep4 = Decimal("254268.84")
+        self.articulo.tiporeparto = ""
+        self.articulo.save()
+        fuente_erp = {
+            "precio_pro": Decimal("100.00"),
+            "precio_prod": Decimal("0.00"),
+            "fporcen": "",
+            "fsuma": "",
+            "fmulti": "",
+            "fpbulto": "",
+            "formula": "",
+            "incre1": Decimal("15.00"),
+            "incre4": Decimal("25.00"),
+            "peso": Decimal("1.00"),
+            "porcentaje1": Decimal("0.00"),
+            "porcentaje4": Decimal("0.00"),
+            "fsum1": Decimal("0.00"),
+            "fsum4": Decimal("0.00"),
+            "fmulti1": Decimal("0.00"),
+            "fmulti4": Decimal("0.00"),
+            "fpbulto_precio": Decimal("0.00"),
+            "precio_stock": Decimal("100.00"),
+            "fijo_retira_costo": Decimal("0.00"),
+            "fijo_retira_porcentaje": Decimal("0.00"),
+            "fijo_reparto_costo": Decimal("0.00"),
+            "fijo_reparto_porcentaje": Decimal("0.00"),
+            "descdiscont1": Decimal("0.00"),
+            "descdiscont4": Decimal("0.00"),
+            "impuesto": Decimal("0.00"),
+        }
+        erp_precios = {
+            "0800117": {
+                "bases": {"4": {"retira": Decimal("125.00"), "reparto": Decimal("125.00")}},
+                "impuesto": Decimal("0.00"),
+                "fuente": fuente_erp,
+            }
+        }
+
+        with patch("api.services.precios._precios_base_erp", return_value=erp_precios):
+            precio = calcular_precio_articulo(
+                articulo=self.articulo,
+                cliente=self.cliente,
+                modalidad="retira",
+                con_impuestos=False,
+            )
+
+        self.assertEqual(precio, Decimal("562.50"))
+
     def test_consultar_precio_endpoint_keeps_existing_response_shape(self):
         request = APIRequestFactory().post(
             "/api/consultar-precio/",
