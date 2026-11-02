@@ -9,9 +9,10 @@ from rest_framework import status
 from rest_framework import serializers
 from django.db.models import Count
 
-from .models import Articulos, BonificacionCliente, Cliente, FormaPago, Favorito, Busqueda, Pedido, PedidoItem, ExportEvent
+from .models import Articulos, Cliente, FormaPago, Favorito, Busqueda, Pedido, PedidoItem, ExportEvent
 from .constants import CLAVE_LEN_THRESHOLD
 from .services.cantidades import validar_cantidad_articulo
+from .services.precios import calcular_precio_articulo
 from django.conf import settings
 
 class PedidoItemSerializer(serializers.ModelSerializer):
@@ -314,70 +315,22 @@ class ArticuloSerializer(BaseSerializer):
         if not self.get_mostrar_precio(obj):
             return None
             
-        # Si se debe mostrar, calcular el precio
-        flete = 0
-        
+        # Reutilizar el cálculo común usado al recalcular pedidos.
         try:
             cliente = request.user.cliente
-            lista_precio = cliente.lista_precio
-            
-            # Obtener filtros del contexto
-            modalidad = self.context.get('modalidad', 'retira')  # 'retira' o 'reparto'
-            con_impuestos = self.context.get('con_impuestos', True)  # True por defecto
-            
-            # === 1. Obtener precio base según lista ===
-            if lista_precio == '1':
-                precio_base = obj.pblret1 if modalidad == 'retira' else obj.pblrep1
-            elif lista_precio == '4':
-                precio_base = obj.pblret4 if modalidad == 'retira' else obj.pblrep4
-            else:
-                precio_base = obj.pblret1  # default
-                
-            # === 2. Ajustar por impuestos ===
-            # precio_sin_iva = precio_base / (1 + obj.iva / 100) if obj.iva else precio_base
-            # precio_final = precio_sin_iva if not con_impuestos else precio_base
-            precio_final = precio_base
-            
-            # === 3. Aplicar flete ===
-            if modalidad == 'reparto':
-                if obj.tiporeparto == 'T':
-                    flete = cliente.codigo_localidad.fletetn1 if cliente.lista_precio == '1' else cliente.codigo_localidad.fletetn4
-                    flete = flete / 1000 * obj.peso if flete else 0
-                elif obj.tiporeparto == 'P':
-                    flete = cliente.codigo_localidad.fletep1 if cliente.lista_precio == '1' else cliente.codigo_localidad.fletep4
-                    flete = precio_final * flete / 100
-            # flete *= (1 + obj.iva / 100)
-            
-            # === 4. Aplicar descuentos ===
-
             forma_pago_id = self.context.get('condicion_pago') or '00'
             forma_pago = FormaPago.objects.get(id=forma_pago_id)
-            bonificacion = BonificacionCliente.objects.filter(cliente=cliente, desde_articulo__lte=obj.clave, hasta_articulo__gte=obj.clave).first()
-            
-            if bonificacion:
-                porcentaje_bonificacion = bonificacion.bonificacion
-                precio_final *= (1 - porcentaje_bonificacion / 100)
-            
-            if forma_pago.descuento > 0:
-                precio_final *= (1 - forma_pago.descuento / 100)
-            if forma_pago.punitorio > 0:
-                precio_final *= (1 + forma_pago.punitorio / 100)
-
-            precio_final += flete if flete else 0
-            
-            # print(f"Cliente: {cliente}, Lista: {lista_precio}, Modalidad: {modalidad}, Precio Base: {precio_base}, Flete: {flete}, Precio Final antes de impuestos: {precio_final} Condicion de pago: {forma_pago.id} Desc: {forma_pago.descuento} Punitorio: {forma_pago.punitorio}")
-            # === 5. Redondear a 2 decimales ===            
-            if con_impuestos:
-                precio_final *= (1 + obj.iva / 100)
-            
-            return round(precio_final, 2)
-
+            return calcular_precio_articulo(
+                articulo=obj,
+                cliente=cliente,
+                modalidad=self.context.get('modalidad', 'retira'),
+                con_impuestos=self.context.get('con_impuestos', True),
+                forma_pago=forma_pago,
+            )
         except (Cliente.DoesNotExist, FormaPago.DoesNotExist):
-            # Si es staff pero no tiene cliente, retornar precio base
             if request.user.is_staff:
                 return obj.pblret1
-            return None        
-        
+            return None
 
 class ArticuloStaffSerializer(serializers.ModelSerializer):
     favoritos_count = serializers.IntegerField(read_only=True)

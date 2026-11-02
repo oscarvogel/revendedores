@@ -34,6 +34,9 @@ def calcular_precio_articulo(
             flete = cliente.codigo_localidad.fletep1 if cliente.lista_precio == "1" else cliente.codigo_localidad.fletep4
             flete = precio_final * flete / Decimal("100") if flete else Decimal("0")
 
+    # El flete forma parte de la base antes de aplicar bonificaciones y condición de pago.
+    precio_final += flete
+
     if condicion_pago_id or forma_pago is not None:
         try:
             if forma_pago is None:
@@ -64,8 +67,6 @@ def calcular_precio_articulo(
                 precio_final *= (Decimal("1") + forma_pago.punitorio / Decimal("100"))
         except FormaPago.DoesNotExist:
             pass
-
-    precio_final += flete
 
     if con_impuestos:
         precio_final *= (Decimal("1") + articulo.iva / Decimal("100"))

@@ -80,7 +80,7 @@ class PrecioServiceTests(TestCase):
             condicion_pago_id="00",
         )
 
-        self.assertEqual(precio, Decimal("126.44"))
+        self.assertEqual(precio, Decimal("125.78"))
 
     def test_consultar_precio_endpoint_keeps_existing_response_shape(self):
         request = APIRequestFactory().post(
