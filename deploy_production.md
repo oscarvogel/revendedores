@@ -423,6 +423,137 @@ El script resuelve el nombre del contenedor **en cada corrida** (el sufijo lo
 genera Coolify), y si el backend no está corriendo lo saltea sin error.
 
 
+### 0.12 Monitor de precios Revendedores (solo `automatizaciones-scheduler`)
+
+El contenedor del scheduler se construye desde dos ubicaciones distintas:
+
+- Compose y Dockerfile: `/srv/fasa-data/compose/automations/automatizaciones/`.
+- Contexto real del build: `/srv/fasa-data/automation-src/automatizaciones/`.
+- Estado persistente y scripts de WhatsApp: `/srv/fasa-data/data/automatizaciones/`, montado como `/data`.
+
+El checkout de automatizaciones del server tiene cambios locales ajenos al
+monitor. Para este deploy no sincronizar el repositorio completo, no hacer
+`git reset` y no usar `rsync --delete`: copiar únicamente el nuevo script y
+añadir sus líneas al `cron.disabled` del contexto de build. El sender existente
+está en `/data/jobs/resumen_dashboard_whatsapp.py`; su configuración permanece
+en `/data/env/alertas-whatsapp.env` y no se copia ni imprime.
+
+El actualizador de Revendedores ya escribe los cuatro campos `pblret1`,
+`pblrep1`, `pblret4` y `pblrep4`. En el cron productivo inspeccionado está
+programado cada hora al minuto 00 y usa `/data/locks/actualiza_lista_reventa_cron.lock`.
+El monitor solo lee esos valores después de la actualización. Sus canarios
+corren cada dos horas al minuto 15; el barrido completo está previsto a las
+03:10. Ambos usan un único lock y los logs quedan bajo
+`/data/logs/linux/price_sync_monitor/`.
+
+#### Deploy por etapas
+
+Mantener una sesión SSH abierta en `fasa_189` durante los pasos del host; así
+se conserva `STAMP` para ambas imágenes. Ejecutar los comandos marcados
+**PowerShell local** desde el worktree del monitor.
+
+1. Guardar la imagen actualmente ejecutada como rollback y respaldar los dos
+   archivos que se tocarán en el source persistente:
+
+```bash
+CTX=/srv/fasa-data/automation-src/automatizaciones
+COMPOSE=/srv/fasa-data/compose/automations/automatizaciones
+STAMP=$(date +%Y%m%d-%H%M%S)
+BACKUP=/srv/fasa-data/backups/automatizaciones/price-sync-monitor-$STAMP
+mkdir -p "$BACKUP"
+CURRENT_IMAGE=$(docker inspect --format '{{.Image}}' automatizaciones-scheduler-cw05ffwv7jkgaaazm9qq9xp2)
+docker image tag "$CURRENT_IMAGE" local/automatizaciones:rollback-price-monitor-$STAMP
+cp -a "$CTX/cron.disabled" "$BACKUP/cron.disabled"
+if [ -e "$CTX/jobs/price_sync_monitor.py" ]; then
+  cp -a "$CTX/jobs/price_sync_monitor.py" "$BACKUP/price_sync_monitor.py"
+fi
+```
+
+2. Copiar solo `price_sync_monitor.py` a `$CTX/jobs/` y agregar las dos
+   entradas de `ops/automatizaciones/price_sync_monitor.cron` al final de
+   `$CTX/cron.disabled`, sin reemplazar su contenido. El checkout de origen
+   tiene cambios locales; conservarlos.
+
+   Para evitar hornear esos otros cambios en producción, construir un overlay
+   del contenedor actual. Copiar el cron activo desde la imagen actual; primero
+   se prueba el script sin las nuevas entradas:
+
+```powershell
+scp ops/automatizaciones/price_sync_monitor.py fasa_189:/tmp/price_sync_monitor.py
+scp ops/automatizaciones/Dockerfile.price-monitor fasa_189:/tmp/price-monitor-Dockerfile
+```
+
+Dentro de la sesión SSH abierta en el servidor:
+
+```bash
+install -m 0644 /tmp/price_sync_monitor.py "$CTX/jobs/price_sync_monitor.py"
+docker cp automatizaciones-scheduler-cw05ffwv7jkgaaazm9qq9xp2:/etc/cron.d/automatizaciones /tmp/price-sync-cron.base
+mkdir -p /tmp/price-monitor-overlay
+cp /tmp/price-sync-cron.base /tmp/price-monitor-overlay/cron.disabled
+cp "$CTX/jobs/price_sync_monitor.py" /tmp/price-monitor-overlay/price_sync_monitor.py
+cp /tmp/price-monitor-Dockerfile /tmp/price-monitor-overlay/Dockerfile
+cd "$COMPOSE"
+docker build -f /tmp/price-monitor-overlay/Dockerfile \
+  --build-arg BASE_IMAGE=local/automatizaciones:rollback-price-monitor-$STAMP \
+  -t local/automatizaciones:price-monitor-dryrun-$STAMP /tmp/price-monitor-overlay
+AUTOMATIZACIONES_IMAGE_TAG=price-monitor-dryrun-$STAMP \
+  docker compose --profile scheduler up -d --no-deps --force-recreate automatizaciones-scheduler
+```
+
+3. Correr manualmente el canario de observación; no envía WhatsApp:
+
+```bash
+docker exec automatizaciones-scheduler-cw05ffwv7jkgaaazm9qq9xp2 \
+  python3 /opt/automatizaciones/jobs/price_sync_monitor.py --mode canary --dry-run
+```
+
+Revisar el JSON (`complete`, cantidades comprobadas, estado de sincronización,
+alertas pendientes y fallos de notificación). El monitor acepta el `OperationalError:
+Connection already opened` de bonificaciones solo cuando también constan la etapa
+completada, 10.369 filas actualizadas, cero errores y `exit_code=0`. El canario
+puede seguir como `incomplete` cuando encuentra artículos de Revendedores sin
+registro en Stock ERP; debe preparar la alerta y no marcar el control como verde.
+
+El dry-run completo del 2026-11-02 verificó 47.216 campos base y 704.960 casos
+de precio en aproximadamente 3 minutos. Encontró 789 artículos de Revendedores
+sin fila correspondiente en `Stock`; esta condición queda informada y mantiene
+el resultado incompleto hasta que se reconcilien esos artículos. No detectó
+diferencias adicionales de precio ni envió WhatsApp real. El límite interno de
+45 minutos y la ventana hasta la siguiente actualización horaria siguen vigentes.
+
+4. Solo tras revisar el canario, preparar el cron overlay con las líneas nuevas
+   y recrear únicamente el scheduler:
+
+```powershell
+scp ops/automatizaciones/price_sync_monitor.cron fasa_189:/tmp/price_sync_monitor.cron
+```
+
+Dentro de la misma sesión SSH abierta en el servidor:
+
+```bash
+sed -i 's/\r$//' /tmp/price_sync_monitor.cron
+if ! grep -q 'JOB_NAME=price_sync_monitor_canary' "$CTX/cron.disabled"; then
+  cat /tmp/price_sync_monitor.cron >> "$CTX/cron.disabled"
+fi
+if ! grep -q 'JOB_NAME=price_sync_monitor_canary' /tmp/price-monitor-overlay/cron.disabled; then
+  cat /tmp/price_sync_monitor.cron >> /tmp/price-monitor-overlay/cron.disabled
+fi
+docker build -f /tmp/price-monitor-overlay/Dockerfile \
+  --build-arg BASE_IMAGE=local/automatizaciones:rollback-price-monitor-$STAMP \
+  -t local/automatizaciones:price-monitor-live-$STAMP /tmp/price-monitor-overlay
+AUTOMATIZACIONES_IMAGE_TAG=price-monitor-live-$STAMP \
+  docker compose --profile scheduler up -d --no-deps --force-recreate automatizaciones-scheduler
+```
+
+5. Verificar la salud, la imagen nueva, el cron cargado en
+   `/etc/cron.d/automatizaciones`, y los logs canary/full. Para rollback,
+   ejecutar `docker compose --profile scheduler up -d --no-deps
+   --force-recreate automatizaciones-scheduler` con
+   `AUTOMATIZACIONES_IMAGE_TAG=rollback-price-monitor-$STAMP`.
+
+**Despliegue ejecutado el 2026-11-02:** `local/automatizaciones:price-monitor-live-20261102-183904` quedó `running/healthy`; se confirmaron ambos cron y los directorios persistentes de logs/lock. El canario posterior verificó 44 campos y 30 casos en `dry-run`, con 8 artículos sin fila en Stock; no envió mensajes reales. El barrido completo de observación verificó 47.216 campos y 704.960 precios válidos, encontró 789 artículos sin fila en Stock y tardó cerca de 3 minutos. El backup de source/cron está en `/srv/fasa-data/backups/automatizaciones/price-sync-monitor-20261102-183904`; la imagen anterior quedó etiquetada `local/automatizaciones:rollback-price-monitor-20261102-183904`. Solo se recreó `automatizaciones-scheduler`. La primera entrega real de WhatsApp depende de la próxima ejecución cron.
+
+
 ---
 
 ## 1. Setup anterior (fasa_195 + nginx/systemd) — histórico, ya no vigente

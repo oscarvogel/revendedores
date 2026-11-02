@@ -1,0 +1,7 @@
+ARG BASE_IMAGE=local/automatizaciones:rollback-price-monitor
+FROM ${BASE_IMAGE}
+
+COPY price_sync_monitor.py /opt/automatizaciones/jobs/price_sync_monitor.py
+COPY cron.disabled /etc/cron.d/automatizaciones
+
+RUN chmod 0644 /etc/cron.d/automatizaciones

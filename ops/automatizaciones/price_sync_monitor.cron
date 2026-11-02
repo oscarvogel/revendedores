@@ -1,0 +1,6 @@
+# Revendedores updater runs hourly at minute 00; the canary runs every two
+# hours at minute 15. The shared runner lock skips a
+# canary while the nightly audit is active. The audit has a 45m internal
+# budget and a 50m process cap; canaries are capped at 10m.
+15 */2 * * * root JOB_NAME=price_sync_monitor_canary JOB_TIMEOUT_SECONDS=600 JOB_COMMAND='python3 /opt/automatizaciones/jobs/price_sync_monitor.py --mode canary' JOB_LOCK_FILE=/data/locks/price_sync_monitor.lock /usr/local/bin/automatizaciones-runner >> /data/logs/linux/price_sync_monitor/canary-cron.log 2>&1
+10 3 * * * root JOB_NAME=price_sync_monitor_full JOB_TIMEOUT_SECONDS=3000 JOB_COMMAND='python3 /opt/automatizaciones/jobs/price_sync_monitor.py --mode full' JOB_LOCK_FILE=/data/locks/price_sync_monitor.lock /usr/local/bin/automatizaciones-runner >> /data/logs/linux/price_sync_monitor/full-cron.log 2>&1

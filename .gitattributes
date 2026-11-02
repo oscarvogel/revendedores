@@ -2,3 +2,4 @@
 # Si el checkout llegara con CRLF, el shebang "#!/bin/sh\r" rompe la ejecucion.
 *.sh text eol=lf
 Dockerfile* text eol=lf
+*.cron text eol=lf
