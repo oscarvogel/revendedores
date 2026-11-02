@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.core.cache import cache
@@ -6,7 +7,29 @@ from django.db import connections
 from api.models import BonificacionCliente, FormaPago
 
 
-_ERP_PRECIOS_ARTICULO_CACHE_KEY = "api:precios:base-articulo:v1"
+_ERP_PRECIOS_ARTICULO_CACHE_KEY = "api:precios:base-articulo:v2"
+_FORMULA_PRECIO_RE = re.compile(r"^([*/+-])\s*(\d+(?:\.\d*)?|\.\d+)$")
+
+
+def _aplicar_formula_precio(precio, formula):
+    """Evalúa el sufijo aritmético que usa VFP en stock.FORMU."""
+    formula = str(formula or "").strip()
+    if not formula:
+        return precio
+
+    coincidencia = _FORMULA_PRECIO_RE.fullmatch(formula)
+    if not coincidencia:
+        return None
+
+    operador, operando = coincidencia.groups()
+    operando = Decimal(operando)
+    if operador == "/":
+        return precio / operando if operando else None
+    if operador == "*":
+        return precio * operando
+    if operador == "+":
+        return precio + operando
+    return precio - operando
 
 
 def _precios_base_erp():
@@ -38,15 +61,35 @@ def _precios_base_erp():
                        COALESCE(fmulti.PRECIO1, 0),
                        COALESCE(fmulti.PRECIO4, 0),
                        COALESCE(fpbulto.PRECIO, 0),
-                       (SELECT COUNT(*)
-                          FROM cFijoxProd
-                         WHERE cFijoxProd.idArtXMed = stock.idArtXMed)
+                       stock.PRECIO,
+                       COALESCE(cfijos.retira_costo, 0),
+                       COALESCE(cfijos.retira_porcentaje, 0),
+                       COALESCE(cfijos.reparto_costo, 0),
+                       COALESCE(cfijos.reparto_porcentaje, 0),
+                       COALESCE((SELECT MAX(com.descdiscont)
+                                   FROM comisiones AS com
+                                  WHERE com.lista = '1'
+                                    AND com.margen = stock.INCRE1), 0),
+                       COALESCE((SELECT MAX(com.descdiscont)
+                                   FROM comisiones AS com
+                                  WHERE com.lista = '4'
+                                    AND com.margen = stock.INCRE4), 0)
                   FROM stock
              LEFT JOIN impuesto ON impuesto.CODIGO = stock.TIPOIMP
              LEFT JOIN fporcien ON fporcien.CODIGO = stock.FPORCEN
              LEFT JOIN fporkg AS fsum ON fsum.CODIGO = stock.FSUMA
              LEFT JOIN fporkg AS fmulti ON fmulti.CODIGO = stock.FMULTI
              LEFT JOIN fpbulto ON fpbulto.CODIGO = stock.FPBULTO
+             LEFT JOIN (
+                   SELECT cFijoxProd.idArtXMed,
+                          SUM(CASE WHEN cfijo1.retira = 1 THEN cfijo1.costo ELSE 0 END) AS retira_costo,
+                          SUM(CASE WHEN cfijo1.retira = 1 THEN cfijo1.porcentaje ELSE 0 END) AS retira_porcentaje,
+                          SUM(CASE WHEN cfijo1.reparto = 1 THEN cfijo1.costo ELSE 0 END) AS reparto_costo,
+                          SUM(CASE WHEN cfijo1.reparto = 1 THEN cfijo1.porcentaje ELSE 0 END) AS reparto_porcentaje
+                     FROM cFijoxProd
+                     JOIN cfijo1 ON cfijo1.codigo = cFijoxProd.cfijo
+                 GROUP BY cFijoxProd.idArtXMed
+             ) AS cfijos ON cfijos.idArtXMed = stock.idArtXMed
                 """
             )
             datos = {}
@@ -72,28 +115,45 @@ def _precios_base_erp():
                     fmulti1,
                     fmulti4,
                     fpbulto_precio,
-                    componentes_fijos,
+                    precio_stock,
+                    fijo_retira_costo,
+                    fijo_retira_porcentaje,
+                    fijo_reparto_costo,
+                    fijo_reparto_porcentaje,
+                    descdiscont1,
+                    descdiscont4,
                 ) = row
 
                 precio_pro = Decimal(str(precio_pro or 0))
+                precio_stock = Decimal(str(precio_stock or 0))
                 peso = Decimal(str(peso or 0))
                 impuesto = Decimal(str(impuesto or 0))
                 precio_base_por_lista = {}
 
-                # PrecioBase usa estas fuentes de flete en este orden. Los
-                # artículos con precio en moneda extranjera, fórmula o costos
-                # fijos quedan con el precio publicado, porque requieren reglas
-                # adicionales del ERP.
-                soportado = not (
-                    Decimal(str(precio_prod or 0)) != 0
-                    or str(formula or "").strip()
-                    or int(componentes_fijos or 0) > 0
+                # No hay artículos en moneda extranjera en la tabla vigente.
+                # VFP evalúa FORMU solo cuando la octava posición de CLAVE
+                # identifica una variante.
+                formula = str(formula or "").strip()
+                clave_texto = str(clave).strip()
+                formula_activa = bool(
+                    formula and len(clave_texto) >= 8 and clave_texto[7]
                 )
+                precio_pro_calculado = precio_pro
+                formula_valida = True
+                if formula_activa:
+                    precio_pro_calculado = _aplicar_formula_precio(precio_pro, formula)
+                    formula_valida = precio_pro_calculado is not None
+
+                soportado = Decimal(str(precio_prod or 0)) == 0 and formula_valida
                 if soportado:
                     for lista, incremento in (("1", incre1), ("4", incre4)):
                         if str(fporcen or "").strip():
                             porcentaje = porcentaje1 if lista == "1" else porcentaje4
-                            flete_interno = precio_pro * Decimal(str(porcentaje or 0)) / 100
+                            flete_interno = (
+                                precio_pro_calculado
+                                * Decimal(str(porcentaje or 0))
+                                / 100
+                            )
                         elif str(fsuma or "").strip():
                             flete_interno = Decimal(str(fsum1 if lista == "1" else fsum4))
                         elif str(fmulti or "").strip():
@@ -104,9 +164,48 @@ def _precios_base_erp():
                         else:
                             flete_interno = Decimal("0")
 
-                        base = precio_pro + flete_interno
-                        base += base * Decimal(str(incremento or 0)) / 100
-                        precio_base_por_lista[lista] = base
+                        base_sin_incremento = precio_pro_calculado + flete_interno
+                        incremento = Decimal(str(incremento or 0))
+                        descdiscont = Decimal(
+                            str(
+                                (descdiscont1 if lista == "1" else descdiscont4)
+                                or 0
+                            )
+                        )
+                        fijo_retira = Decimal(str(fijo_retira_costo or 0))
+                        fijo_retira += (
+                            precio_stock
+                            * Decimal(str(fijo_retira_porcentaje or 0))
+                            / 100
+                        )
+                        fijo_reparto = Decimal(str(fijo_reparto_costo or 0))
+                        fijo_reparto += (
+                            precio_stock
+                            * Decimal(str(fijo_reparto_porcentaje or 0))
+                            / 100
+                        )
+                        precio_base_por_lista[lista] = {
+                            "retira": (
+                                base_sin_incremento
+                                * (Decimal("1") + incremento / 100)
+                                + fijo_retira
+                            ),
+                            "reparto": (
+                                base_sin_incremento
+                                * (Decimal("1") + incremento / 100)
+                                + fijo_reparto
+                            ),
+                            "retira_discontinuado": (
+                                base_sin_incremento
+                                * (Decimal("1") + (incremento - descdiscont) / 100)
+                                + fijo_retira
+                            ),
+                            "reparto_discontinuado": (
+                                base_sin_incremento
+                                * (Decimal("1") + (incremento - descdiscont) / 100)
+                                + fijo_reparto
+                            ),
+                        }
 
                 datos[str(clave).strip()] = {
                     "bases": precio_base_por_lista,
@@ -150,10 +249,13 @@ def calcular_precio_articulo(
         impuesto_adicional = Decimal("0")
 
     precio_base_erp = erp_datos.get("bases", {}).get(cliente.lista_precio)
-    es_precio_especial = (
-        str(articulo.clave).startswith("F")
-        or str(articulo.discontinuado or "").strip().upper() in {"S", "Y", "1", "T"}
-    )
+    if isinstance(precio_base_erp, dict):
+        es_discontinuado = (
+            str(articulo.discontinuado or "").strip().upper() in {"S", "Y", "1", "T"}
+        )
+        clave_base = f"{modalidad}_discontinuado" if es_discontinuado else modalidad
+        precio_base_erp = precio_base_erp.get(clave_base)
+    es_precio_especial = str(articulo.clave).startswith("F")
     if precio_base_erp is not None and not es_precio_especial:
         precio_base = precio_base_erp
 
