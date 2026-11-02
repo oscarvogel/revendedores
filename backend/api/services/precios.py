@@ -4,10 +4,10 @@ from decimal import Decimal, ROUND_HALF_UP
 from django.core.cache import cache
 from django.db import connections
 
-from api.models import BonificacionCliente, FormaPago
+from api.models import Articulos, BonificacionCliente, FormaPago
 
 
-_ERP_PRECIOS_ARTICULO_CACHE_KEY = "api:precios:base-articulo:v2"
+_ERP_PRECIOS_ARTICULO_CACHE_KEY = "api:precios:base-articulo:v3"
 _FORMULA_PRECIO_RE = re.compile(r"^([*/+-])\s*(\d+(?:\.\d*)?|\.\d+)$")
 
 
@@ -32,12 +32,87 @@ def _aplicar_formula_precio(precio, formula):
     return precio - operando
 
 
+def _bases_erp_desde_fuente(fuente, *, formula=None, formula_activa=False):
+    """Reconstruye las bases de ambas listas desde una fila base del ERP."""
+    if Decimal(str(fuente.get("precio_prod") or 0)) != 0:
+        return {}
+
+    precio_pro = Decimal(str(fuente.get("precio_pro") or 0))
+    formula = str(fuente.get("formula", "") if formula is None else formula).strip()
+    if formula_activa and formula:
+        precio_pro = _aplicar_formula_precio(precio_pro, formula)
+        if precio_pro is None:
+            return {}
+
+    peso = Decimal(str(fuente.get("peso") or 0))
+    precio_stock = Decimal(str(fuente.get("precio_stock") or 0))
+    fijo_retira = Decimal(str(fuente.get("fijo_retira_costo") or 0))
+    fijo_retira += (
+        precio_stock
+        * Decimal(str(fuente.get("fijo_retira_porcentaje") or 0))
+        / 100
+    )
+    fijo_reparto = Decimal(str(fuente.get("fijo_reparto_costo") or 0))
+    fijo_reparto += (
+        precio_stock
+        * Decimal(str(fuente.get("fijo_reparto_porcentaje") or 0))
+        / 100
+    )
+
+    bases = {}
+    for lista, incremento in (("1", fuente.get("incre1")), ("4", fuente.get("incre4"))):
+        if str(fuente.get("fporcen") or "").strip():
+            porcentaje = fuente.get("porcentaje1" if lista == "1" else "porcentaje4")
+            flete_interno = precio_pro * Decimal(str(porcentaje or 0)) / 100
+        elif str(fuente.get("fsuma") or "").strip():
+            flete_interno = Decimal(
+                str(fuente.get("fsum1" if lista == "1" else "fsum4") or 0)
+            )
+        elif str(fuente.get("fmulti") or "").strip():
+            precio_flete = fuente.get("fmulti1" if lista == "1" else "fmulti4")
+            flete_interno = Decimal(str(precio_flete or 0)) * peso
+        elif str(fuente.get("fpbulto") or "").strip():
+            flete_interno = Decimal(str(fuente.get("fpbulto_precio") or 0))
+        else:
+            flete_interno = Decimal("0")
+
+        base_sin_incremento = precio_pro + flete_interno
+        incremento = Decimal(str(incremento or 0))
+        descdiscont = Decimal(
+            str(fuente.get("descdiscont1" if lista == "1" else "descdiscont4") or 0)
+        )
+        precio_fijo = {
+            "retira": fijo_retira,
+            "reparto": fijo_reparto,
+        }
+        bases[lista] = {
+            modalidad: base_sin_incremento * (Decimal("1") + incremento / 100) + fijo
+            for modalidad, fijo in precio_fijo.items()
+        }
+        bases[lista].update(
+            {
+                f"{modalidad}_discontinuado": (
+                    base_sin_incremento
+                    * (Decimal("1") + (incremento - descdiscont) / 100)
+                    + fijo
+                )
+                for modalidad, fijo in precio_fijo.items()
+            }
+        )
+    return bases
+
+
 def _precios_base_erp():
     """Carga las bases e impuestos que PrecioBase calcula desde el ERP."""
     if connections["fasa"].vendor == "sqlite":
         return {}
 
     def cargar():
+        raices_variantes = {
+            str(clave).strip()[:7]
+            for clave in Articulos.objects.values_list("clave", flat=True)
+            if len(str(clave).strip()) == 8
+        }
         with connections["fasa"].cursor() as cursor:
             cursor.execute(
                 """
@@ -124,92 +199,48 @@ def _precios_base_erp():
                     descdiscont4,
                 ) = row
 
-                precio_pro = Decimal(str(precio_pro or 0))
-                precio_stock = Decimal(str(precio_stock or 0))
-                peso = Decimal(str(peso or 0))
                 impuesto = Decimal(str(impuesto or 0))
-                precio_base_por_lista = {}
-
-                # No hay artículos en moneda extranjera en la tabla vigente.
-                # VFP evalúa FORMU solo cuando la octava posición de CLAVE
-                # identifica una variante.
-                formula = str(formula or "").strip()
                 clave_texto = str(clave).strip()
-                formula_activa = bool(
-                    formula and len(clave_texto) >= 8 and clave_texto[7]
+                fuente = {
+                    "precio_pro": precio_pro,
+                    "precio_prod": precio_prod,
+                    "fporcen": fporcen,
+                    "fsuma": fsuma,
+                    "fmulti": fmulti,
+                    "fpbulto": fpbulto,
+                    "formula": formula,
+                    "incre1": incre1,
+                    "incre4": incre4,
+                    "peso": peso,
+                    "porcentaje1": porcentaje1,
+                    "porcentaje4": porcentaje4,
+                    "fsum1": fsum1,
+                    "fsum4": fsum4,
+                    "fmulti1": fmulti1,
+                    "fmulti4": fmulti4,
+                    "fpbulto_precio": fpbulto_precio,
+                    "precio_stock": precio_stock,
+                    "fijo_retira_costo": fijo_retira_costo,
+                    "fijo_retira_porcentaje": fijo_retira_porcentaje,
+                    "fijo_reparto_costo": fijo_reparto_costo,
+                    "fijo_reparto_porcentaje": fijo_reparto_porcentaje,
+                    "descdiscont1": descdiscont1,
+                    "descdiscont4": descdiscont4,
+                }
+                formula_activa = len(clave_texto) >= 8 and bool(clave_texto[7])
+                precio_base_por_lista = _bases_erp_desde_fuente(
+                    fuente,
+                    formula_activa=formula_activa,
                 )
-                precio_pro_calculado = precio_pro
-                formula_valida = True
-                if formula_activa:
-                    precio_pro_calculado = _aplicar_formula_precio(precio_pro, formula)
-                    formula_valida = precio_pro_calculado is not None
-
-                soportado = Decimal(str(precio_prod or 0)) == 0 and formula_valida
-                if soportado:
-                    for lista, incremento in (("1", incre1), ("4", incre4)):
-                        if str(fporcen or "").strip():
-                            porcentaje = porcentaje1 if lista == "1" else porcentaje4
-                            flete_interno = (
-                                precio_pro_calculado
-                                * Decimal(str(porcentaje or 0))
-                                / 100
-                            )
-                        elif str(fsuma or "").strip():
-                            flete_interno = Decimal(str(fsum1 if lista == "1" else fsum4))
-                        elif str(fmulti or "").strip():
-                            precio_flete = fmulti1 if lista == "1" else fmulti4
-                            flete_interno = Decimal(str(precio_flete or 0)) * peso
-                        elif str(fpbulto or "").strip():
-                            flete_interno = Decimal(str(fpbulto_precio or 0))
-                        else:
-                            flete_interno = Decimal("0")
-
-                        base_sin_incremento = precio_pro_calculado + flete_interno
-                        incremento = Decimal(str(incremento or 0))
-                        descdiscont = Decimal(
-                            str(
-                                (descdiscont1 if lista == "1" else descdiscont4)
-                                or 0
-                            )
-                        )
-                        fijo_retira = Decimal(str(fijo_retira_costo or 0))
-                        fijo_retira += (
-                            precio_stock
-                            * Decimal(str(fijo_retira_porcentaje or 0))
-                            / 100
-                        )
-                        fijo_reparto = Decimal(str(fijo_reparto_costo or 0))
-                        fijo_reparto += (
-                            precio_stock
-                            * Decimal(str(fijo_reparto_porcentaje or 0))
-                            / 100
-                        )
-                        precio_base_por_lista[lista] = {
-                            "retira": (
-                                base_sin_incremento
-                                * (Decimal("1") + incremento / 100)
-                                + fijo_retira
-                            ),
-                            "reparto": (
-                                base_sin_incremento
-                                * (Decimal("1") + incremento / 100)
-                                + fijo_reparto
-                            ),
-                            "retira_discontinuado": (
-                                base_sin_incremento
-                                * (Decimal("1") + (incremento - descdiscont) / 100)
-                                + fijo_retira
-                            ),
-                            "reparto_discontinuado": (
-                                base_sin_incremento
-                                * (Decimal("1") + (incremento - descdiscont) / 100)
-                                + fijo_reparto
-                            ),
-                        }
 
                 datos[str(clave).strip()] = {
                     "bases": precio_base_por_lista,
                     "impuesto": impuesto,
+                    "fuente": (
+                        {**fuente, "impuesto": impuesto}
+                        if clave_texto in raices_variantes
+                        else None
+                    ),
                 }
             return datos
 
@@ -238,7 +269,23 @@ def calcular_precio_articulo(
     else:
         precio_base = articulo.pblret1
 
-    erp_datos = _precios_base_erp().get(str(articulo.clave).strip(), {})
+    erp_precios = _precios_base_erp()
+    clave_articulo = str(articulo.clave).strip()
+    erp_datos = erp_precios.get(clave_articulo, {})
+    if not erp_datos.get("bases") and len(clave_articulo) == 8:
+        raiz = erp_precios.get(clave_articulo[:7], {})
+        fuente = raiz.get("fuente")
+        if fuente:
+            bases_variante = _bases_erp_desde_fuente(
+                fuente,
+                formula=getattr(articulo, "formula", ""),
+                formula_activa=bool(clave_articulo[7]),
+            )
+            if bases_variante:
+                erp_datos = {
+                    "bases": bases_variante,
+                    "impuesto": fuente.get("impuesto", Decimal("0")),
+                }
     if impuesto_adicional is None:
         impuesto_adicional = erp_datos.get("impuesto", Decimal("0"))
     else:
