@@ -1,4 +1,5 @@
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.db import connection
@@ -80,7 +81,43 @@ class PrecioServiceTests(TestCase):
             condicion_pago_id="00",
         )
 
-        self.assertEqual(precio, Decimal("125.78"))
+        self.assertEqual(precio, Decimal("126.45"))
+
+    def test_calcular_precio_reparto_matches_vfp_impuesto_discount_and_freight_order(self):
+        self.cliente.lista_precio = "4"
+        self.cliente.save(update_fields=["lista_precio"])
+        self.localidad.fletetn4 = Decimal("11978.40")
+        self.localidad.save(update_fields=["fletetn4"])
+        self.articulo.pblret4 = Decimal("7967.08128")
+        self.articulo.pblrep4 = Decimal("7967.08128")
+        self.articulo.tiporeparto = "T"
+        self.articulo.peso = Decimal("25.00")
+        forma_pago = FormaPago.objects.create(
+            id="53",
+            nombre="14 dias neto",
+            lista="4",
+            descuento=Decimal("12.00"),
+            punitorio=Decimal("0.00"),
+        )
+
+        with patch(
+            "api.services.precios._precios_base_erp",
+            return_value={
+                "001.001": {
+                    "bases": {"4": Decimal("7967.08128")},
+                    "impuesto": Decimal("5.70"),
+                }
+            },
+        ):
+            precio = calcular_precio_articulo(
+                articulo=self.articulo,
+                cliente=self.cliente,
+                modalidad="reparto",
+                con_impuestos=True,
+                forma_pago=forma_pago,
+            )
+
+        self.assertEqual(precio, Decimal("9329.25"))
 
     def test_consultar_precio_endpoint_keeps_existing_response_shape(self):
         request = APIRequestFactory().post(

@@ -836,6 +836,7 @@ def exportar_favoritos(request):
                 'articulo__grupo',
                 'articulo__stock',
                 'articulo__tiporeparto',
+                'articulo__discontinuado',
             )
         )
         
