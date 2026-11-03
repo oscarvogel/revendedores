@@ -892,6 +892,7 @@ class StaffClientesView(APIView):
             'cuit': cliente.cuit,
             'direccion': cliente.direccion,
             'is_active': cliente.user.is_active,
+            'puede_descargar_lista': cliente.puede_descargar_lista,
             'date_joined': cliente.user.date_joined.isoformat(),
             'last_login': cliente.user.last_login.isoformat() if cliente.user.last_login else None,
             'bonificaciones': list(bonificaciones)  # Agregar bonificaciones
@@ -906,6 +907,9 @@ class StaffClientesView(APIView):
         if not cliente:
             return Response({'error': 'Cliente no encontrado'}, status=404)
         
+        if 'puede_descargar_lista' in request.data and not isinstance(request.data['puede_descargar_lista'], bool):
+            return Response({'error': 'El permiso de descarga debe ser verdadero o falso'}, status=400)
+
         try:
             with transaction.atomic():
                 # Campos que se pueden actualizar del usuario
@@ -942,7 +946,12 @@ class StaffClientesView(APIView):
                 # Campos que se pueden actualizar del cliente
                 cliente_updated = False
                 cambios_cliente = []
-                
+
+                if 'puede_descargar_lista' in request.data:
+                    cambios_cliente.append(f"puede_descargar_lista: {cliente.puede_descargar_lista} → {request.data['puede_descargar_lista']}")
+                    cliente.puede_descargar_lista = request.data['puede_descargar_lista']
+                    cliente_updated = True
+
                 if 'numero_cliente' in request.data and request.data['numero_cliente'] != cliente.numero_cliente:
                     # Verificar que el número de cliente no esté en uso
                     if Cliente.objects.filter(numero_cliente=request.data['numero_cliente']).exclude(pk=cliente.pk).exists():

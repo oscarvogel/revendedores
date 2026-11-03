@@ -374,6 +374,8 @@ class PrecioServiceTests(TestCase):
             favoritos.append(Favorito(user=self.user, articulo=articulo))
 
         Favorito.objects.bulk_create(favoritos)
+        self.cliente.puede_descargar_lista = True
+        self.cliente.save(update_fields=["puede_descargar_lista"])
 
         request = APIRequestFactory().get(
             "/api/exportar-favoritos/",

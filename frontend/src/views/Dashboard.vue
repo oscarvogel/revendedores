@@ -11,7 +11,7 @@
         <ActionButton to="/pedidos" variant="secondary">
           Mis pedidos
         </ActionButton>
-        <ActionButton type="button" variant="secondary" class="!border-green-600 !bg-green-600 !text-white hover:!bg-green-700" @click="exportLista">
+        <ActionButton v-if="puedeDescargarLista" type="button" variant="secondary" class="!border-green-600 !bg-green-600 !text-white hover:!bg-green-700" @click="exportLista">
           <span v-if="downloading">Preparando...</span>
           <span v-else class="inline-flex items-center gap-2">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -107,7 +107,7 @@
     </transition>
 
     <!-- Acceso rápido: Descargar lista -->
-    <div class="rounded-2xl border border-green-200 bg-gradient-to-r from-green-50 to-emerald-50 p-5 sm:p-6 shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div v-if="puedeDescargarLista" class="rounded-2xl border border-green-200 bg-gradient-to-r from-green-50 to-emerald-50 p-5 sm:p-6 shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
       <div class="flex items-start gap-3">
         <div class="p-2.5 bg-green-600 rounded-xl text-white shadow-sm">
           <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -347,6 +347,9 @@ import ComprasPagosChart from '../components/ComprasPagosChart.vue'
 import ActionButton from '@/components/ui/ActionButton.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import api from '@/services/api'
+import { usePermisoDescarga } from '@/services/permisoDescarga'
+
+const puedeDescargarLista = usePermisoDescarga()
 import * as XLSX from 'xlsx'
 
 const authStore = useAuthStore()

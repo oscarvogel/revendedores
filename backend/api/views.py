@@ -799,6 +799,13 @@ def consultar_precio(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def permiso_descarga_lista(request):
+    permitido = Cliente.objects.filter(user=request.user, puede_descargar_lista=True).exists()
+    return Response({'puede_descargar_lista': permitido})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def exportar_favoritos(request):
     """
     Endpoint para exportar todos los artículos favoritos del usuario con información completa.
@@ -811,6 +818,10 @@ def exportar_favoritos(request):
         except Cliente.DoesNotExist:
             return Response({'error': 'Cliente no encontrado'}, status=404)
         
+
+        if not cliente.puede_descargar_lista:
+            return Response({'error': 'No tenés permiso para descargar la lista.'}, status=403)
+
         # Obtener parámetros de consulta (los mismos que usa en la vista principal)
         modalidad = request.query_params.get('modalidad', 'retira')
         con_impuestos = request.query_params.get('con_impuestos', 'true').lower() == 'true'

@@ -3162,6 +3162,10 @@ export default {
                 <textarea id="direccion" class="w-full p-2 border rounded" rows="2">${clienteDetalle.direccion || ''}</textarea>
               </div>
               
+              <label class="flex items-center gap-2 text-sm font-medium">
+                <input id="puede_descargar_lista" type="checkbox" ${clienteDetalle.puede_descargar_lista ? 'checked' : ''}>
+                Puede descargar lista de artículos
+              </label>
               <!-- Sección de Bonificaciones -->
               ${clienteDetalle.bonificaciones && clienteDetalle.bonificaciones.length > 0 ? `
                 <div class="mt-4 p-4 bg-blue-50 border border-blue-200 rounded">
@@ -3200,6 +3204,7 @@ export default {
             return {
               email: document.getElementById('email').value,
               is_active: document.getElementById('is_active').value === 'true',
+              puede_descargar_lista: document.getElementById('puede_descargar_lista').checked,
               first_name: document.getElementById('first_name').value,
               last_name: document.getElementById('last_name').value,
               nombre: document.getElementById('nombre').value,

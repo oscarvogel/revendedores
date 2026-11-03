@@ -125,6 +125,7 @@ class Cliente(models.Model):
     regimen_percepcion = models.CharField(max_length=2, choices=REGIMEN_PERCEPCION, blank=True)
     cuit = models.CharField(max_length=13, blank=True, null=True)
     direccion = models.CharField(max_length=200, blank=True)
+    puede_descargar_lista = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs):
         """Formatea el numero_cliente con ceros a la izquierda (00040)."""
