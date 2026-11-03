@@ -119,6 +119,7 @@ async function clearAuthAndRedirect(authStore) {
   localStorage.removeItem('refresh_token')
   localStorage.removeItem('user')
   localStorage.removeItem('session_id')
+  window.dispatchEvent(new Event('user-logged-out'))
   
   // Update store state if available (without calling the logout endpoint)
   try {

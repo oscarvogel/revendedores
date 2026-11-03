@@ -46,7 +46,7 @@
           <div class="mt-5 grid gap-5 md:grid-cols-2">
             <label class="block">
               <span class="mb-2 block text-sm font-bold text-gray-700">Modalidad</span>
-              <select v-model="modalidad" class="h-11 w-full rounded-lg border border-gray-300 bg-white px-3 font-semibold focus:border-red-600 focus:outline-none focus:ring-4 focus:ring-red-100">
+              <select v-model="modalidad" :disabled="actualizandoPrecios" class="h-11 w-full rounded-lg border border-gray-300 bg-white px-3 font-semibold focus:border-red-600 focus:outline-none focus:ring-4 focus:ring-red-100">
                 <option value="retira">Retira en FASA</option>
                 <option value="reparto">Reparto</option>
               </select>
@@ -92,20 +92,21 @@
         </div>
         <button
           type="button"
-          :disabled="sending || cart.items.length === 0"
+          :disabled="sending || actualizandoPrecios || !preciosActualizados || cart.items.length === 0"
           class="mt-5 inline-flex min-h-12 w-full items-center justify-center rounded-lg bg-red-700 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-60"
           @click="sendOrder"
         >
-          {{ sending ? 'ENVIANDO PEDIDO...' : 'ENVIAR PEDIDO A FASA' }}
+          {{ sending ? 'ENVIANDO PEDIDO...' : actualizandoPrecios ? 'ACTUALIZANDO PRECIOS...' : 'ENVIAR PEDIDO A FASA' }}
         </button>
         <p v-if="errorMessage" class="mt-3 rounded-lg bg-red-50 p-3 text-sm font-semibold text-red-800">{{ errorMessage }}</p>
+        <button v-if="!preciosActualizados && !actualizandoPrecios" type="button" class="mt-3 text-sm font-bold text-red-700 underline" @click="actualizarPrecios">Reintentar actualización de precios</button>
       </aside>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { cart } from '@/services/cart'
 import ActionButton from '@/components/ui/ActionButton.vue'
@@ -120,8 +121,28 @@ const condicionPago = ref(localStorage.getItem('condicion_pago') || '')
 const observaciones = ref('')
 const sending = ref(false)
 const errorMessage = ref('')
+const actualizandoPrecios = ref(false)
+const preciosActualizados = ref(false)
 
-watch(modalidad, value => localStorage.setItem('articulos_modalidad', value))
+const actualizarPrecios = async () => {
+  if (!cart.items.length) return
+  actualizandoPrecios.value = true
+  preciosActualizados.value = false
+  errorMessage.value = ''
+  try {
+    await cart.refreshPrices({ modalidad: modalidad.value, con_impuestos: conImpuestos.value, condicion_pago: condicionPago.value })
+    preciosActualizados.value = true
+  } catch (error) {
+    errorMessage.value = error.response?.data?.error || error.message || 'No se pudieron actualizar los precios.'
+  } finally {
+    actualizandoPrecios.value = false
+  }
+}
+watch(modalidad, value => {
+  localStorage.setItem('articulos_modalidad', value)
+  actualizarPrecios()
+})
+onMounted(actualizarPrecios)
 
 const itemWeight = item => {
   const qty = Number(item.cantidad) || 0

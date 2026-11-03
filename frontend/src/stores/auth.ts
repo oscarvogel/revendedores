@@ -104,6 +104,8 @@ export const useAuthStore = defineStore('auth', () => {
         localStorage.removeItem('session_id')
       } catch (e) {}
 
+      window.dispatchEvent(new Event('user-logged-out'))
+
       router.push('/login')
     }
   }

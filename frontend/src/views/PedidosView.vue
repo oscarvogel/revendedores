@@ -33,11 +33,14 @@
             class="w-full rounded-lg border border-gray-300 bg-white px-3 py-3 text-sm font-semibold text-gray-950 shadow-sm focus:border-red-600 focus:outline-none focus:ring-4 focus:ring-red-100 sm:w-72"
           >
             <option value="">Todos los estados</option>
-            <option value="PENDIENTE">Pendiente</option>
+            <option value="PENDIENTE">Pendiente de revisión</option>
             <option value="CONFIRMADO">Confirmado</option>
-            <option value="EN_PROCESO">En Proceso</option>
+            <option value="REVISADO">Revisado</option>
+            <option value="CARGADO_ERP">Cargado en ERP</option>
+            <option value="EN_PROCESO">En preparación</option>
             <option value="PREPARADO">Preparado</option>
             <option value="ENVIADO">Enviado</option>
+            <option value="LISTO_RETIRO">Listo para retirar</option>
             <option value="ENTREGADO">Entregado</option>
             <option value="CANCELADO">Cancelado</option>
           </select>
@@ -132,13 +135,6 @@
             class="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-3 text-sm font-bold text-gray-800 shadow-sm transition hover:bg-gray-100"
           >
             Ver detalle
-          </button>
-          <button
-            v-if="pedido.estado === 'PENDIENTE'"
-            @click="cancelarPedido(pedido.id)"
-            class="inline-flex items-center justify-center rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 transition hover:bg-red-100"
-          >
-            Cancelar
           </button>
           <button
             v-if="canReorder(pedido)"
@@ -346,9 +342,12 @@ const getEstadoClasses = (estado) => {
 
 const getEstadoTexto = (estado) => {
   const estados = {
-    'PENDIENTE': 'Pendiente',
+    'PENDIENTE': 'Pendiente de revisión',
+    'REVISADO': 'Revisado',
+    'CARGADO_ERP': 'Cargado en ERP',
+    'LISTO_RETIRO': 'Listo para retirar',
     'CONFIRMADO': 'Confirmado',
-    'EN_PROCESO': 'En Proceso',
+    'EN_PROCESO': 'En preparación',
     'PREPARADO': 'Preparado',
     'ENVIADO': 'Enviado',
     'ENTREGADO': 'Entregado',
@@ -424,39 +423,32 @@ const cerrarModal = () => {
 
 const getTotalCantidad = (items) => {
   if (!items) return 0;
-  return items.reduce((total, item) => total + item.cantidad, 0);
-};
-
-const cancelarPedido = async (pedidoId) => {
-  if (!confirm('¿Estás seguro de que quieres cancelar este pedido?')) {
-    return;
-  }
-  
-  try {
-    // Aquí implementarías el endpoint para cancelar
-    showNotification('Función de cancelación en desarrollo', 'info');
-  } catch (error) {
-    console.error('Error al cancelar pedido:', error);
-    showNotification('Error al cancelar el pedido', 'error');
-  }
+  return items.reduce((total, item) => total + (Number(item.cantidad) || 0), 0);
 };
 
 const reordenar = async (pedido) => {
   try {
     console.log('🛒 Agregando productos del pedido al carrito...');
-    
-    // Limpiar carrito actual
+    const modalidad = localStorage.getItem('articulos_modalidad') || 'retira';
+    const conImpuestos = localStorage.getItem('articulos_con_impuestos') !== 'false';
+    const condicion = localStorage.getItem('condicion_pago');
+    const articulos = await Promise.all(pedido.items.map(async item => {
+      const clave = item.articulo_detalle?.clave || item.articulo;
+      const [articulo, precio] = await Promise.all([
+        api.get(`/api/articulos/${encodeURIComponent(clave)}/`),
+        api.post('/api/consultar-precio/', {
+          articulo_clave: clave, modalidad, con_impuestos: conImpuestos,
+          ...(condicion ? { condicion_pago: condicion } : {}),
+        }),
+      ]);
+      const precioLista = Number(precio.data?.articulo?.precio_lista);
+      if (!precio.data?.success || !Number.isFinite(precioLista) || precioLista <= 0) throw new Error(`Precio no disponible para ${clave}`);
+      return { articulo: { ...articulo.data, precio_lista: precioLista }, cantidad: Number(item.cantidad) };
+    }));
+
+    // Conservar el carrito anterior si no se pueden recuperar todos los artículos.
     cart.clear();
-    
-    // Agregar todos los items del pedido al carrito
-    for (const item of pedido.items) {
-      // Obtener la información del artículo según el formato disponible
-      const articuloData = item.articulo_detalle || item.articulo;
-      
-      if (articuloData) {
-        cart.add(articuloData, item.cantidad);
-      }
-    }
+    articulos.forEach(item => cart.add(item.articulo, item.cantidad));
     
     showNotification(`${pedido.items.length} productos agregados al carrito`, 'success');
     

@@ -109,6 +109,8 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.removeItem('user')
       localStorage.removeItem('session_id')
 
+      window.dispatchEvent(new Event('user-logged-out'))
+
       router.push('/login')
     }
   }

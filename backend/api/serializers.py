@@ -26,6 +26,8 @@ class PedidoItemSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         articulo = attrs.get('articulo')
         cantidad = attrs.get('cantidad')
+        if articulo is not None and articulo.empresa_id != settings.EMPRESA_ID:
+            raise serializers.ValidationError({'articulo': 'El artículo no pertenece al catálogo disponible.'})
         if articulo is not None and cantidad is not None:
             try:
                 attrs['cantidad'] = validar_cantidad_articulo(articulo, cantidad)
@@ -52,7 +54,7 @@ class PedidoItemSerializer(serializers.ModelSerializer):
         return articulo.imagen.url
 
 class PedidoSerializer(serializers.ModelSerializer):
-    items = PedidoItemSerializer(many=True)
+    items = PedidoItemSerializer(many=True, allow_empty=False)
     observaciones = serializers.CharField(write_only=True, required=False, allow_blank=True, max_length=1000)
     estado_display = serializers.CharField(source='get_estado_display', read_only=True)
     usuario_nombre = serializers.CharField(source='user.username', read_only=True)
@@ -75,6 +77,8 @@ class PedidoSerializer(serializers.ModelSerializer):
             ) from exc
 
         condicion_pago = validated_data.get('condicion_pago') or cliente.condicion_pago
+        if condicion_pago and condicion_pago.lista not in (None, '', cliente.lista_precio):
+            raise serializers.ValidationError({'condicion_pago': 'La condición no corresponde a la lista del cliente.'})
         validated_data['condicion_pago'] = condicion_pago
         validated_data['cliente_snapshot'] = {
             'numero_cliente': cliente.numero_cliente,

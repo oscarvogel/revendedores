@@ -168,11 +168,14 @@ class Busqueda(models.Model):
 
 class Pedido(models.Model):
     ESTADO_PEDIDO = [
-        ('PENDIENTE', 'Pendiente'),
+        ('PENDIENTE', 'Pendiente de revisión'),
         ('CONFIRMADO', 'Confirmado'),
-        ('EN_PROCESO', 'En Proceso'),
+        ('REVISADO', 'Revisado'),
+        ('CARGADO_ERP', 'Cargado en ERP'),
+        ('EN_PROCESO', 'En preparación'),
         ('PREPARADO', 'Preparado'),
         ('ENVIADO', 'Enviado'),
+        ('LISTO_RETIRO', 'Listo para retirar'),
         ('ENTREGADO', 'Entregado'),
         ('CANCELADO', 'Cancelado'),
     ]
@@ -521,6 +524,29 @@ class ShortTrackingLink(models.Model):
         return f"{self.code} -> {self.target_url}"
 
 
+class BotConversation(models.Model):
+    session_id = models.CharField(max_length=80, unique=True, db_index=True)
+    origen = models.CharField(max_length=30, db_index=True, choices=[('chat_local', 'Chat local'), ('whatsapp', 'WhatsApp'), ('api', 'API')])
+    telefono = models.CharField(max_length=30, null=True, blank=True, db_index=True)
+    started_at = models.DateTimeField(default=timezone.now, db_index=True)
+    last_message_at = models.DateTimeField(default=timezone.now, db_index=True)
+    message_count = models.PositiveIntegerField(default=0)
+    feedback_status = models.CharField(max_length=30, db_index=True, default='pending', choices=[('pending', 'Pendiente'), ('useful', 'Sirvio'), ('not_useful', 'No sirvio'), ('dangerous', 'Respuesta peligrosa'), ('wrong_product', 'Producto mal entendido')])
+    feedback_comment = models.TextField(blank=True)
+    reviewed_at = models.DateTimeField(blank=True, null=True)
+    reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, blank=True, null=True, related_name='bot_conversation_reviews')
+    usuario = models.ForeignKey(User, on_delete=models.SET_NULL, blank=True, null=True, related_name='bot_conversations')
+
+    class Meta:
+        verbose_name = 'Conversacion Bot'
+        verbose_name_plural = 'Conversaciones Bot'
+        ordering = ['-last_message_at']
+        indexes = [
+            models.Index(fields=['origen', 'last_message_at'], name='api_botconv_origen_1da4e4_idx'),
+            models.Index(fields=['feedback_status', 'last_message_at'], name='api_botconv_feedbac_970783_idx'),
+        ]
+
+
 class BotConversationLog(models.Model):
     ORIGEN_CHOICES = [
         ('chat_local', 'Chat local'),
@@ -536,6 +562,7 @@ class BotConversationLog(models.Model):
     ]
 
     fecha_hora = models.DateTimeField(default=timezone.now, db_index=True)
+    conversation = models.ForeignKey(BotConversation, on_delete=models.SET_NULL, blank=True, null=True, related_name='logs')
     origen = models.CharField(max_length=30, choices=ORIGEN_CHOICES, db_index=True)
     usuario = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='bot_logs')
     telefono = models.CharField(max_length=30, null=True, blank=True, db_index=True)

@@ -427,11 +427,14 @@
                   class="border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-red-500"
                 >
                   <option value="">Todos</option>
-                  <option value="PENDIENTE">Pendiente</option>
+                  <option value="PENDIENTE">Pendiente de revisión</option>
                   <option value="CONFIRMADO">Confirmado</option>
-                  <option value="EN_PROCESO">En Proceso</option>
+                  <option value="REVISADO">Revisado</option>
+                  <option value="CARGADO_ERP">Cargado en ERP</option>
+                  <option value="EN_PROCESO">En preparación</option>
                   <option value="PREPARADO">Preparado</option>
                   <option value="ENVIADO">Enviado</option>
+                  <option value="LISTO_RETIRO">Listo para retirar</option>
                   <option value="ENTREGADO">Entregado</option>
                   <option value="CANCELADO">Cancelado</option>
                 </select>
@@ -498,22 +501,30 @@
                   :class="getEstadoSelectClasses(pedido.estado)"
                   class="px-3 py-1 rounded-full text-xs font-medium border-0"
                 >
-                  <option value="PENDIENTE">Pendiente</option>
+                  <option value="PENDIENTE">Pendiente de revisión</option>
                   <option value="CONFIRMADO">Confirmado</option>
-                  <option value="EN_PROCESO">En Proceso</option>
+                  <option value="REVISADO">Revisado</option>
+                  <option value="CARGADO_ERP">Cargado en ERP</option>
+                  <option value="EN_PROCESO">En preparación</option>
                   <option value="PREPARADO">Preparado</option>
                   <option value="ENVIADO">Enviado</option>
+                  <option value="LISTO_RETIRO">Listo para retirar</option>
                   <option value="ENTREGADO">Entregado</option>
                   <option value="CANCELADO">Cancelado</option>
                 </select>
               </div>
               <div class="text-sm text-gray-600 lg:text-right">
-                <p><strong>Usuario:</strong> {{ pedido.usuario_nombre || pedido.user }}</p>
+                <p><strong>Cliente:</strong> {{ pedido.cliente_snapshot?.nombre || pedido.usuario_nombre }} ({{ pedido.cliente_snapshot?.numero_cliente || pedido.usuario_nombre }})</p>
                 <p><strong>Fecha:</strong> {{ formatDate(pedido.fecha_creacion) }}</p>
                 <p class="font-semibold text-lg text-green-600">${{ formatCurrency(pedido.total) }}</p>
               </div>
             </div>
 
+            <div class="text-sm text-gray-700 mb-3">
+              <p><strong>Modalidad:</strong> {{ pedido.modalidad === 'reparto' ? 'Reparto' : 'Retira' }} · <strong>Condición:</strong> {{ pedido.cliente_snapshot?.condicion_pago_nombre || 'A confirmar' }}</p>
+              <p><strong>Observaciones:</strong> {{ pedido.cliente_snapshot?.observaciones || 'Sin observaciones' }}</p>
+              <p><strong>Email cliente:</strong> {{ pedido.email_cliente_estado }} · <strong>Email Ventas:</strong> {{ pedido.email_ventas_estado }}</p>
+            </div>
             <!-- Productos del pedido (resumido) -->
             <div class="border-t pt-4 mb-4">
               <p class="text-sm text-gray-600 mb-2">
@@ -1067,11 +1078,14 @@
                 v-model="formEdicion.estado"
                 class="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-red-500"
               >
-                <option value="PENDIENTE">Pendiente</option>
+                <option value="PENDIENTE">Pendiente de revisión</option>
                 <option value="CONFIRMADO">Confirmado</option>
-                <option value="EN_PROCESO">En Proceso</option>
+                <option value="REVISADO">Revisado</option>
+                  <option value="CARGADO_ERP">Cargado en ERP</option>
+                  <option value="EN_PROCESO">En preparación</option>
                 <option value="PREPARADO">Preparado</option>
                 <option value="ENVIADO">Enviado</option>
+                  <option value="LISTO_RETIRO">Listo para retirar</option>
                 <option value="ENTREGADO">Entregado</option>
                 <option value="CANCELADO">Cancelado</option>
               </select>
@@ -2540,9 +2554,13 @@ export default {
       try {
         console.log(`📧 Reenviando confirmación del pedido ${pedidoId}`);
         
-        await api.post(`/api/staff/pedidos/${pedidoId}/reenviar-email/`);
-        
-        Toast.show('Email de confirmación reenviado', 'success', 3000);
+        const response = await api.post(`/api/staff/pedidos/${pedidoId}/reenviar-email/`);
+        if (!response.data.success) {
+          Toast.show('Algún correo no se pudo enviar. Revisá el estado de las notificaciones.', 'error', 5000);
+        } else {
+          Toast.show('Notificaciones reenviadas', 'success', 3000);
+        }
+        await this.cargarTodosPedidos(this.paginacionPedidos.currentPage);
         
       } catch (error) {
         console.error('❌ Error al reenviar email:', error);
@@ -2814,7 +2832,7 @@ export default {
 
     getTotalCantidadPedido(items) {
       if (!items || !Array.isArray(items)) return 0;
-      return items.reduce((total, item) => total + (item.cantidad || 0), 0);
+      return items.reduce((total, item) => total + (Number(item.cantidad) || 0), 0);
     },
 
     getArticuloNombrePedido(item) {
