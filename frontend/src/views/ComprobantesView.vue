@@ -142,7 +142,7 @@
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Saldo</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Estado</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Vencimiento</th>
-              <th class="sticky right-0 z-20 min-w-[15rem] bg-gray-50 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Acciones</th>
+              <th class="sticky right-0 z-20 min-w-[7.5rem] bg-gray-50 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Acciones</th>
             </tr>
           </thead>
           <tbody class="bg-white divide-y divide-gray-200">
@@ -181,32 +181,36 @@
                   1° Venc: {{ formatDate(comprobante.fecha_primer_vencimiento) }}
                 </div>
               </td>
-              <td class="sticky right-0 z-10 min-w-[15rem] bg-white px-4 py-4 text-sm text-gray-500">
+              <td class="sticky right-0 z-10 min-w-[7.5rem] bg-white px-4 py-4 text-sm text-gray-500">
                 <div class="flex flex-col items-start gap-2 whitespace-normal">
-                  <button
-                    v-if="['F', 'C', 'D'].includes(comprobante.codigo)"
-                    @click="descargarFactura(comprobante)"
-                    :disabled="descargando === comprobanteKey(comprobante)"
-                    class="inline-flex items-center gap-2 rounded-lg border border-red-700 bg-red-700 px-3 py-2 font-semibold text-white shadow-sm transition-colors hover:border-red-800 hover:bg-red-800 disabled:cursor-wait disabled:opacity-60"
-                    :aria-busy="descargando === comprobanteKey(comprobante)"
-                    :title="comprobante.codigo === 'F' ? 'Descargar factura PDF' : 'Descargar comprobante PDF'"
-                  >
-                    <i class="fas fa-download" :class="{ 'animate-pulse': descargando === comprobanteKey(comprobante) }"></i>
-                    {{ descargando === comprobanteKey(comprobante) ? 'Descargando…' : (comprobante.codigo === 'F' ? 'Descargar factura' : 'Descargar comprobante') }}
-                  </button>
+                  <div class="flex items-center gap-2">
+                    <button
+                      v-if="['F', 'C', 'D'].includes(comprobante.codigo)"
+                      @click="descargarFactura(comprobante)"
+                      :disabled="descargando === comprobanteKey(comprobante)"
+                      type="button"
+                      class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-red-700 bg-red-700 text-white shadow-sm transition-colors hover:border-red-800 hover:bg-red-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
+                      :aria-busy="descargando === comprobanteKey(comprobante)"
+                      :aria-label="descargando === comprobanteKey(comprobante) ? 'Descargando comprobante' : (comprobante.codigo === 'F' ? 'Descargar factura PDF' : 'Descargar comprobante PDF')"
+                      :title="descargando === comprobanteKey(comprobante) ? 'Descargando…' : (comprobante.codigo === 'F' ? 'Descargar factura PDF' : 'Descargar comprobante PDF')"
+                    >
+                      <i class="fas fa-download" aria-hidden="true" :class="{ 'animate-pulse': descargando === comprobanteKey(comprobante) }"></i>
+                    </button>
+                    <button
+                      @click="verDetalle(comprobante.numero)"
+                      type="button"
+                      class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
+                      aria-label="Ver detalle"
+                      title="Ver detalle"
+                    >
+                      <i class="fas fa-eye" aria-hidden="true"></i>
+                    </button>
+                  </div>
                   <p
                     v-if="errorDescarga && errorDescargaKey === comprobanteKey(comprobante)"
                     class="max-w-[14rem] whitespace-normal text-xs leading-4 text-red-700"
                     role="alert"
                   >{{ errorDescarga }}</p>
-                  <button
-                    @click="verDetalle(comprobante.numero)"
-                    class="inline-flex items-center text-blue-600 transition-colors hover:text-blue-900"
-                    title="Ver detalle"
-                  >
-                    <i class="fas fa-eye mr-1"></i>
-                    Ver detalle
-                  </button>
                 </div>
               </td>
             </tr>
