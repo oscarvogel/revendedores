@@ -636,7 +636,19 @@ const exportToExcel = async () => {
       const fecha = new Date().toISOString().split('T')[0]
       const fileName = `favoritos_${parametros.modalidad}_${parametros.con_impuestos ? 'con' : 'sin'}_impuestos_${fecha}.xlsx`
       
-      XLSX.writeFile(workbook, fileName)
+            const fileData = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })
+      const fileBlob = new Blob([fileData], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      })
+      const fileUrl = URL.createObjectURL(fileBlob)
+      const downloadLink = document.createElement('a')
+      downloadLink.href = fileUrl
+      downloadLink.download = fileName
+      document.body.appendChild(downloadLink)
+      downloadLink.click()
+      downloadLink.remove()
+      window.setTimeout(() => URL.revokeObjectURL(fileUrl), 1000)
+
       
       showNotification(`✅ ${total_articulos} artículos favoritos exportados correctamente.`, 'success')
       
