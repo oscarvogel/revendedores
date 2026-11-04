@@ -257,6 +257,7 @@ def calcular_precio_articulo(
     forma_pago=None,
     bonificaciones_cliente=None,
     impuesto_adicional=None,
+    erp_precios=None,
 ):
     """Calcula el precio comercial vigente para un articulo y cliente."""
     flete = Decimal("0")
@@ -269,7 +270,8 @@ def calcular_precio_articulo(
     else:
         precio_base = articulo.pblret1
 
-    erp_precios = _precios_base_erp()
+    if erp_precios is None:
+        erp_precios = _precios_base_erp()
     clave_articulo = str(articulo.clave).strip()
     erp_datos = erp_precios.get(clave_articulo, {})
     if not erp_datos.get("bases") and len(clave_articulo) == 8:

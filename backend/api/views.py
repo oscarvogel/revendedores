@@ -30,7 +30,7 @@ from .models import Articulos, Cliente, FormaPago, Favorito, Busqueda, Pedido, R
 from .serializers import ArticuloSerializer, FormaPagoSerializer, FavoritoSerializer, BusquedaSerializer, PedidoSerializer
 from .constants import TIPOS_COMPROBANTE
 from .fechas import esta_vencido, formatear_fecha
-from .services.precios import calcular_precio_articulo
+from .services.precios import _precios_base_erp, calcular_precio_articulo
 from .services.erp_documents import (
     InvoiceFiscalError,
     InvoiceNotFound,
@@ -870,6 +870,9 @@ def exportar_favoritos(request):
         
         # Preparar datos para exportación
         datos_exportacion = []
+        # El caché de precios ERP puede contener todos los artículos. Evitar
+        # deserializarlo de nuevo por cada favorito.
+        erp_precios = _precios_base_erp()
         for favorito in favoritos:
             articulo = favorito.articulo
             precio_calculado = calcular_precio_articulo(
@@ -880,6 +883,7 @@ def exportar_favoritos(request):
                 condicion_pago_id=precio_condicion_pago_id,
                 forma_pago=forma_pago,
                 bonificaciones_cliente=bonificaciones_cliente,
+                erp_precios=erp_precios,
             )
             
             datos_exportacion.append({
