@@ -34,8 +34,10 @@ from .services.precios import _precios_base_erp, calcular_precio_articulo
 from .services.erp_documents import (
     InvoiceFiscalError,
     InvoiceNotFound,
+    ReceiptApplicationMismatch,
     InvoiceServiceUnavailable,
     download_invoice_pdf,
+    download_receipt_pdf,
 )
 from backend.BaseViewSet import BaseAppModelViewSet
 from rest_framework import viewsets
@@ -1234,7 +1236,7 @@ def descargar_comprobante_pdf(request, tipo, numero_comprobante):
     """Return the existing ERP-generated PDF for one of the authenticated customer's invoices."""
     document_type = str(tipo or '').strip().upper()
     invoice_number = str(numero_comprobante or '').strip()
-    if document_type not in {'F', 'C', 'D'} or not re.fullmatch(r'\d{12}', invoice_number):
+    if document_type not in {'F', 'C', 'D', 'R'} or not re.fullmatch(r'\d{12}', invoice_number):
         return Response({'message': 'Comprobante no encontrado.'}, status=404)
 
     try:
@@ -1243,19 +1245,48 @@ def descargar_comprobante_pdf(request, tipo, numero_comprobante):
         return Response({'message': 'Comprobante no encontrado.'}, status=404)
 
     try:
-        content = download_invoice_pdf(
-            company_id=settings.EMPRESA_ID,
-            customer_code=cliente.numero_cliente,
-            document_type=document_type,
-            invoice_number=invoice_number,
-        )
+        if document_type == 'R':
+            from .models import CuentaCorrienteCliente, Cobranzas
+
+            belongs_to_customer = CuentaCorrienteCliente.objects.using(settings.ACCOUNTING_DB_ALIAS).filter(
+                cliente=cliente.numero_cliente, codigo='R', numero=invoice_number
+            ).exists()
+            if not belongs_to_customer:
+                raise InvoiceNotFound
+            rows = Cobranzas.objects.using(settings.ACCOUNTING_DB_ALIAS).filter(recibo=invoice_number).order_by('id')
+            payments = [{
+                'amount': format(row.monto or 0, '.2f'),
+                'method': ' · '.join(value for value in (
+                    str(row.tipo or '').strip(), str(row.codigo or '').strip(), str(row.detalle or '').strip()
+                ) if value) or 'Otro',
+                'bank': str(row.banco or '').strip() or None,
+                'reference': str(row.numero or '').strip() or None,
+                'due_date': formatear_fecha(row.vence) if row.vence else None,
+            } for row in rows]
+            content = download_receipt_pdf(
+                company_id=settings.EMPRESA_ID,
+                customer_code=cliente.numero_cliente,
+                receipt_number=invoice_number,
+                payments=payments,
+            )
+        else:
+            content = download_invoice_pdf(
+                company_id=settings.EMPRESA_ID,
+                customer_code=cliente.numero_cliente,
+                document_type=document_type,
+                invoice_number=invoice_number,
+            )
     except InvoiceNotFound:
         return Response({'message': 'Comprobante no encontrado.'}, status=404)
+    except ReceiptApplicationMismatch:
+        return Response({'message': 'El recibo no coincide con las facturas aplicadas.'}, status=422)
     except InvoiceFiscalError:
         return Response(
             {'message': 'La factura no se puede generar porque faltan datos fiscales o autorización.'},
             status=422,
         )
+    except ValueError:
+        return Response({'message': 'El recibo no coincide con las facturas aplicadas.'}, status=422)
     except InvoiceServiceUnavailable:
         return Response(
             {'message': 'El servicio de impresión no está disponible. Intentá nuevamente más tarde.'},
@@ -1263,7 +1294,8 @@ def descargar_comprobante_pdf(request, tipo, numero_comprobante):
         )
 
     response = HttpResponse(content, content_type='application/pdf')
-    response['Content-Disposition'] = f'attachment; filename="comprobante-{document_type}-{invoice_number}.pdf"'
+    prefix = 'recibo' if document_type == 'R' else 'comprobante'
+    response['Content-Disposition'] = f'attachment; filename="{prefix}-{document_type}-{invoice_number}.pdf"'
     response['Cache-Control'] = 'private, no-store, max-age=0'
     response['Pragma'] = 'no-cache'
     response['Expires'] = '0'

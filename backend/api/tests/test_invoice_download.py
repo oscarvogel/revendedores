@@ -7,6 +7,7 @@ from unittest.mock import patch
 from django.test import SimpleTestCase, override_settings
 from rest_framework.test import APIRequestFactory, force_authenticate
 
+from api.services.erp_documents import ReceiptApplicationMismatch, download_receipt_pdf
 from api.views import descargar_comprobante_pdf
 
 
@@ -193,3 +194,81 @@ class InvoiceDownloadTests(SimpleTestCase):
 
         self.assertEqual(response.status_code, 404)
         self.assertNotIn("private data", str(response.data))
+
+    @override_settings(EMPRESA_ID=2, ACCOUNTING_DB_ALIAS="default")
+    @patch("api.views.Cliente.objects.get")
+    @patch("api.models.CuentaCorrienteCliente.objects.using")
+    @patch("api.models.Cobranzas.objects.using")
+    @patch("api.views.download_receipt_pdf")
+    def test_recibo_autenticado_envia_medios_de_pago_al_renderizador(
+        self, download_pdf, payments_using, account_using, customer_get
+    ):
+        customer_get.return_value = self.customer
+        account_using.return_value.filter.return_value.exists.return_value = True
+        payment = SimpleNamespace(
+            monto=1250, tipo="R", codigo="F", detalle="Transferencia",
+            banco="Banco", numero="ref-1", vence=None,
+        )
+        payments_using.return_value.filter.return_value.order_by.return_value = [payment]
+        download_pdf.return_value = self.pdf
+
+        response = self._get(tipo="R", numero="000100000001")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertIn("recibo-R-000100000001.pdf", response["Content-Disposition"])
+        self.assertEqual(
+            download_pdf.call_args.kwargs["payments"],
+            [{
+                "amount": "1250.00",
+                "method": "R · F · Transferencia",
+                "bank": "Banco",
+                "reference": "ref-1",
+                "due_date": None,
+            }],
+        )
+
+    @override_settings(EMPRESA_ID=2, ACCOUNTING_DB_ALIAS="default")
+    @patch("api.views.Cliente.objects.get")
+    @patch("api.models.CuentaCorrienteCliente.objects.using")
+    @patch("api.views.download_receipt_pdf")
+    def test_recibo_ajeno_no_se_envia_al_renderizador(self, download_pdf, account_using, customer_get):
+        customer_get.return_value = self.customer
+        account_using.return_value.filter.return_value.exists.return_value = False
+
+        response = self._get(tipo="R", numero="000100000001")
+
+        self.assertEqual(response.status_code, 404)
+        download_pdf.assert_not_called()
+
+    @override_settings(EMPRESA_ID=2, ACCOUNTING_DB_ALIAS="default")
+    @patch("api.views.Cliente.objects.get")
+    @patch("api.models.CuentaCorrienteCliente.objects.using")
+    @patch("api.models.Cobranzas.objects.using")
+    @patch("api.views.download_receipt_pdf", side_effect=ReceiptApplicationMismatch)
+    def test_recibo_inconsistente_devuelve_mensaje_de_aplicaciones(self, download_pdf, payments_using, account_using, customer_get):
+        customer_get.return_value = self.customer
+        account_using.return_value.filter.return_value.exists.return_value = True
+        payments_using.return_value.filter.return_value.order_by.return_value = []
+
+        response = self._get(tipo="R", numero="000100000001")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.data["message"], "El recibo no coincide con las facturas aplicadas.")
+
+    @override_settings(
+        ERP_DOCUMENT_RENDER_URL="https://erp.example/api/v1/documents/invoices/by-reference",
+        ERP_DOCUMENT_API_TOKEN="integration-secret",
+        ERP_DOCUMENT_TIMEOUT=8,
+    )
+    @patch("api.services.erp_documents.urlopen")
+    def test_erp_422_de_recibo_se_mapea_a_inconsistencia_de_aplicaciones(self, urlopen):
+        urlopen.side_effect = HTTPError("https://erp.example", 422, "private validation", {}, None)
+
+        with self.assertRaises(ReceiptApplicationMismatch):
+            download_receipt_pdf(
+                company_id=2,
+                customer_code="00591",
+                receipt_number="000100000001",
+                payments=[{"amount": "1250.00", "method": "Transferencia"}],
+            )

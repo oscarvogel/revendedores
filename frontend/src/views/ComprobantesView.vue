@@ -185,7 +185,7 @@
                 <div class="flex flex-col items-start gap-2 whitespace-normal">
                   <div class="flex items-center gap-2">
                     <button
-                      v-if="['F', 'C', 'D'].includes(comprobante.codigo)"
+                                            v-if="['F', 'C', 'D', 'R'].includes(comprobante.codigo)"
                       @click="descargarFactura(comprobante)"
                       :disabled="descargando === comprobanteKey(comprobante)"
                       type="button"
@@ -443,7 +443,7 @@ const descargarFactura = async (comprobante) => {
     errorDescarga.value = status === 404
       ? 'No se encontró el comprobante solicitado.'
       : status === 422
-        ? 'El comprobante no puede generarse por datos fiscales incompletos o sin autorización.'
+        ? (comprobante.codigo === 'R' ? 'El recibo no coincide con las facturas aplicadas.' : 'El comprobante no puede generarse por datos fiscales incompletos o sin autorización.')
         : 'No se pudo descargar el comprobante. Intentá nuevamente más tarde.'
     if (window.Toast) window.Toast.show(errorDescarga.value, 'error', 7000)
   } finally {
