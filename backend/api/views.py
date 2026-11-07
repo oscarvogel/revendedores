@@ -1253,7 +1253,9 @@ def descargar_comprobante_pdf(request, tipo, numero_comprobante):
             ).exists()
             if not belongs_to_customer:
                 raise InvoiceNotFound
-            rows = Cobranzas.objects.using(settings.ACCOUNTING_DB_ALIAS).filter(recibo=invoice_number).order_by('id')
+            rows = Cobranzas.objects.using(settings.ACCOUNTING_DB_ALIAS).filter(
+                models.Q(recibo=invoice_number) | models.Q(comp=invoice_number)
+            ).order_by('id')
             payments = [{
                 'amount': format(row.monto or 0, '.2f'),
                 'method': ' · '.join(value for value in (
