@@ -1,7 +1,19 @@
 // src/utils/storage.js
 
-const PREFIX = 'dashboard_';
+const PREFIX = 'dashboard_v2_';
+const LEGACY_PREFIX = 'dashboard_';
 const TTL = 5 * 60 * 1000; // 5 minutos en milisegundos
+
+// Migración única: el caché viejo podía contener datos filtrados por cliente
+// (se guardaban si el filtro cambiaba en medio de la recarga). Se purga.
+try {
+  Object.keys(localStorage)
+    .filter(k => k.startsWith(LEGACY_PREFIX) && !k.startsWith(PREFIX) && k !== 'dashboard_cacheTime')
+    .forEach(k => localStorage.removeItem(k));
+  localStorage.removeItem('dashboard_cacheTime');
+} catch (e) {
+  // localStorage no disponible: se ignora
+}
 
 export const dashboardStorage = {
   // Guardar datos con marca de tiempo

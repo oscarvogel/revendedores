@@ -1497,7 +1497,6 @@ export default {
       
       // Filtro global por usuario
       filtroUsuarioGlobal: '',
-      filtroRunId: 0,
       listaUsuarios: [],
       loadingUsuarios: false,
       mostrarSugerenciasUsuarios: false,
@@ -1925,7 +1924,20 @@ export default {
       }
     },
 
+    // Todas las recargas generales (carga inicial, filtro, Recargar) pasan
+    // por acá y se ejecutan EN SERIE: si el usuario filtra/limpia/recarga
+    // varias veces seguidas, cada corrida espera a la anterior y la ÚLTIMA
+    // acción es la que vale. Sin esto, una respuesta lenta pisa datos nuevos.
+    encolarRecarga(tarea) {
+      const anterior = this.recargaChain || Promise.resolve();
+      const actual = anterior.then(tarea, tarea);
+      // Que un fallo no rompa la cadena para las próximas corridas
+      this.recargaChain = actual.catch(() => {});
+      return actual;
+    },
+
     async fetchAllData() {
+      return this.encolarRecarga(async () => {
       this.loading = true;
       try {
         // Solo usar caché si no hay filtro aplicado
@@ -1940,10 +1952,16 @@ export default {
             this.updateLastUpdatedTime();
           }
           this.startUpdateTimer();
+          // Las secciones sin caché (consultas, descargas, vistas) se cargan
+          // en vivo igual: si no, quedarían vacías hasta el próximo Recargar.
+          await this.fetchArticulosMasConsultados();
+          await this.fetchExportsSummary();
+          await this.fetchArticulosVistasSummary();
         } else {
           await this.fetchDashboardData();
           await this.fetchDailySales();
           await this.fetchArticulosMasConsultados();
+          await this.fetchExportsSummary();
           await this.fetchArticulosVistasSummary();
         }
       } catch (error) {
@@ -1951,16 +1969,16 @@ export default {
         await this.fetchDashboardData();
         await this.fetchDailySales();
         await this.fetchArticulosMasConsultados();
+        await this.fetchExportsSummary();
         await this.fetchArticulosVistasSummary();
       } finally {
         this.loading = false;
       }
+      });
     },
 
     async reloadData() {
-      // Invalida una corrida de filtro en curso: esta recarga usa el filtro
-      // actual y sus respuestas son las que valen.
-      ++this.filtroRunId;
+      return this.encolarRecarga(async () => {
       this.loading = true;
       try {
         await this.fetchDashboardData(true);
@@ -1974,6 +1992,7 @@ export default {
       } finally {
         this.loading = false;
       }
+      });
     },
 
     // Nueva función para cargar artículos más consultados
@@ -2175,35 +2194,27 @@ export default {
 
     // Aplicar filtro global por usuario
     async aplicarFiltroUsuarioGlobal() {
-      // Guard contra clicks rápidos (filtrar -> limpiar -> filtrar):
-      // si arranca una corrida nueva, la anterior se descarta y no pisa datos.
-      const runId = ++this.filtroRunId;
-      const cancelado = () => runId !== this.filtroRunId;
+      return this.encolarRecarga(async () => {
+      // La corrida lee el filtro al empezar; como las recargas van en serie,
+      // la última acción del usuario siempre es la que vale.
       this.loading = true;
       try {
         // Recargar todos los datos con el filtro aplicado:
         // consultas de precios, ingresos/sesiones, favoritos, búsquedas,
         // ventas, descargas y vistas de ofertas/discontinuados
         await this.fetchDashboardData(true);
-        if (cancelado()) return;
         await this.fetchDailySales(true);
-        if (cancelado()) return;
         await this.fetchArticulosMasConsultados();
-        if (cancelado()) return;
         await this.fetchExportsSummary();
-        if (cancelado()) return;
         await this.fetchArticulosVistasSummary();
-        if (cancelado()) return;
         
         // Si las secciones de gestión están abiertas, recargarlas también
         if (this.mostrarPedidos) {
           await this.cargarTodosPedidos(1);
-          if (cancelado()) return;
         }
         
         if (this.mostrarClientes) {
           await this.cargarTodosClientes(1);
-          if (cancelado()) return;
         }
         
         if (this.filtroUsuarioGlobal) {
@@ -2212,10 +2223,11 @@ export default {
           Toast.show('Filtro removido - mostrando todos los datos', 'info');
         }
       } catch (error) {
-        if (!cancelado()) Toast.show('Error al aplicar filtro', 'error');
+        Toast.show('Error al aplicar filtro', 'error');
       } finally {
-        if (!cancelado()) this.loading = false;
+        this.loading = false;
       }
+      });
     },
 
     loadFromCache() {
@@ -2254,11 +2266,27 @@ export default {
     },
 
     async fetchDashboardData(force = false) {
-      // No usar caché si hay filtro aplicado o si se fuerza la recarga
-      if (!force && !this.filtroUsuarioGlobal) {
-        const cached = dashboardStorage.get('mostFavoritedProducts');
-        if (cached) {
-          this.mostFavoritedProducts = cached;
+      // Foto del filtro al iniciar la corrida: la respuesta corresponde a este
+      // filtro aunque el usuario lo cambie en medio de la recarga. Solo se
+      // escribe caché si la corrida fue sin filtro (si no, un Ctrl+F5 posterior
+      // mostraría datos filtrados sin badge).
+      const filtroDeEstaCorrida = this.filtroUsuarioGlobal;
+      // No usar caché si hay filtro aplicado o si se fuerza la recarga.
+      // El atajo solo vale si están TODAS las claves: si no, se trae todo.
+      if (!force && !filtroDeEstaCorrida) {
+        const cachedFav = dashboardStorage.get('mostFavoritedProducts');
+        const cachedSummary = dashboardStorage.get('salesSummary');
+        const cachedSearch = dashboardStorage.get('mostSearchedWords');
+        const cachedMetrics = dashboardStorage.get('sessionMetrics');
+        const cachedHours = dashboardStorage.get('sessionsByHour');
+        const cachedDevice = dashboardStorage.get('deviceIngress');
+        if (cachedFav && cachedSummary && cachedSearch && cachedMetrics && cachedHours && cachedDevice) {
+          this.mostFavoritedProducts = cachedFav;
+          this.salesSummary = cachedSummary;
+          this.mostSearchedWords = cachedSearch;
+          this.sessionMetrics = cachedMetrics;
+          this.sessionsByHour = cachedHours;
+          this.deviceIngress = cachedDevice;
           return;
         }
       }
@@ -2268,8 +2296,8 @@ export default {
       try {
         // Preparar parámetros de filtro
         const params = {};
-        if (this.filtroUsuarioGlobal) {
-          params.usuario = this.filtroUsuarioGlobal;
+        if (filtroDeEstaCorrida) {
+          params.usuario = filtroDeEstaCorrida;
         }
 
         const [productsRes, salesRes, searchRes, metricsRes, deviceRes] = await Promise.all([
@@ -2309,8 +2337,8 @@ export default {
           total: deviceRes.data?.total || 0,
         };
 
-        // Solo guardar en caché si no hay filtro aplicado
-        if (!this.filtroUsuarioGlobal) {
+        // Solo guardar en caché si la corrida fue sin filtro aplicado
+        if (!filtroDeEstaCorrida) {
           dashboardStorage.set('mostFavoritedProducts', this.mostFavoritedProducts);
           dashboardStorage.set('salesSummary', this.salesSummary);
           dashboardStorage.set('mostSearchedWords', this.mostSearchedWords);
@@ -2320,9 +2348,9 @@ export default {
           localStorage.setItem('dashboard_cacheTime', Date.now());
         }
 
-  // Cargar resumen de exportaciones (no bloquear la carga principal)
-  this.fetchExportsSummary();
-
+        // Nota: el resumen de exportaciones lo piden explícitamente los
+        // llamadores (aplicarFiltro, recargar, carga inicial), no acá con
+        // fire-and-forget, para que una corrida vieja no pise datos nuevos.
         this.startUpdateTimer();
 
         Toast.remove(loaderId);
@@ -2357,7 +2385,8 @@ export default {
     },
 
     async fetchDailySales(force = false) {
-      if (!force && !this.filtroUsuarioGlobal) {
+      const filtroDeEstaCorrida = this.filtroUsuarioGlobal;
+      if (!force && !filtroDeEstaCorrida) {
         const cached = dashboardStorage.get('dailySalesData');
         if (cached && Array.isArray(cached.labels) && Array.isArray(cached.values)) {
           this.dailySalesData.labels = cached.labels;
@@ -2371,8 +2400,8 @@ export default {
       try {
         // Preparar parámetros de filtro
         const params = {};
-        if (this.filtroUsuarioGlobal) {
-          params.usuario = this.filtroUsuarioGlobal;
+        if (filtroDeEstaCorrida) {
+          params.usuario = filtroDeEstaCorrida;
         }
 
         const response = await api.get('/api/staff/daily-sales/', { params });
@@ -2384,8 +2413,8 @@ export default {
         this.dailySalesData.labels = dates;
         this.dailySalesData.values = sales;
 
-        // Solo guardar en caché si no hay filtro aplicado
-        if (!this.filtroUsuarioGlobal) {
+        // Solo guardar en caché si la corrida fue sin filtro aplicado
+        if (!filtroDeEstaCorrida) {
           dashboardStorage.set('dailySalesData', { labels: dates, values: sales });
           localStorage.setItem('dashboard_cacheTime', Date.now());
         }
