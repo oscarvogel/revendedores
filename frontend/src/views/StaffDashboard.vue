@@ -788,6 +788,15 @@
                 <td class="py-3 px-4">
                   <div class="flex justify-center space-x-2">
                     <button 
+                      @click="filtrarPorCliente(cliente)"
+                      class="text-green-700 hover:text-green-900 transition"
+                      title="Filtrar dashboard por este cliente (consultas, ingresos, precios, búsquedas)"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.207A1 1 0 013 6.5V4z" />
+                      </svg>
+                    </button>
+                    <button 
                       @click="verDetalleCliente(cliente)"
                       class="text-blue-600 hover:text-blue-800 transition"
                       title="Ver detalle"
@@ -1797,8 +1806,14 @@ export default {
       try {
         console.log('📊 Cargando usuarios que ingresaron hoy...');
         
+        // Si hay filtro por cliente, pasar el usuario para ver solo sus ingresos
+        const params = {};
+        if (this.filtroUsuarioGlobal) {
+          params.usuario = this.filtroUsuarioGlobal;
+        }
+
         // Obtener las sesiones de hoy (el backend usa su propia definición de "hoy")
-        const response = await api.get('/api/staff/sessions/');
+        const response = await api.get('/api/staff/sessions/', { params });
         
         console.log('📊 Respuesta del servidor:', response.data);
         const sesionesHoy = response.data;
@@ -1947,7 +1962,7 @@ export default {
         await this.fetchDashboardData(true);
         await this.fetchDailySales(true);
         await this.fetchArticulosMasConsultados();
-        await this.fetchArticulosVistasSummary();
+        await this.fetchExportsSummary();
         await this.fetchArticulosVistasSummary();
         Toast.show('Datos recargados', 'success', 2000);
       } catch (error) {
@@ -2156,10 +2171,14 @@ export default {
     async aplicarFiltroUsuarioGlobal() {
       this.loading = true;
       try {
-        // Recargar todos los datos con el filtro aplicado
+        // Recargar todos los datos con el filtro aplicado:
+        // consultas de precios, ingresos/sesiones, favoritos, búsquedas,
+        // ventas, descargas y vistas de ofertas/discontinuados
         await this.fetchDashboardData(true);
         await this.fetchDailySales(true);
         await this.fetchArticulosMasConsultados();
+        await this.fetchExportsSummary();
+        await this.fetchArticulosVistasSummary();
         
         // Si las secciones de gestión están abiertas, recargarlas también
         if (this.mostrarPedidos) {
@@ -3000,6 +3019,20 @@ export default {
     },
 
     // Acciones sobre clientes
+    // Filtrar todo el dashboard por un cliente de la lista:
+    // consultas de precios, ingresos/sesiones, favoritos, búsquedas, etc.
+    filtrarPorCliente(cliente) {
+      if (!cliente?.username) return;
+      const nombre = `${cliente.first_name || ''} ${cliente.last_name || ''}`.trim();
+      this.filtroUsuarioGlobal = cliente.username;
+      this.usuariosBusqueda = nombre ? `${cliente.username} - ${nombre}` : cliente.username;
+      this.mostrarSugerenciasUsuarios = false;
+      this.listaUsuarios = [];
+      this.aplicarFiltroUsuarioGlobal();
+      // Subir al filtro global para que se vea el badge activo
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    },
+
     async verDetalleCliente(cliente) {
       try {
         console.log('👤 Cargando detalle de cliente:', cliente.id);
@@ -3061,7 +3094,14 @@ export default {
           icon: 'info',
           confirmButtonText: 'Cerrar',
           confirmButtonColor: '#059669',
+          showDenyButton: true,
+          denyButtonText: 'Filtrar por este cliente',
+          denyButtonColor: '#16a34a',
           width: '600px'
+        }).then((result) => {
+          if (result.isDenied) {
+            this.filtrarPorCliente(cliente);
+          }
         });
         
       } catch (error) {

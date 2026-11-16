@@ -362,9 +362,16 @@ def sessions_today_detail(request):
     inicio_hoy = ahora.replace(hour=0, minute=0, second=0, microsecond=0)
     
     # Obtener todas las sesiones desde el inicio del día de hoy
-    sesiones = RegistroSesion.objects.filter(
+    sesiones_qs = RegistroSesion.objects.filter(
         inicio_sesion__gte=inicio_hoy
-    ).select_related('usuario', 'cliente').values(
+    ).select_related('usuario', 'cliente')
+
+    # Filtro opcional por usuario (para ver ingresos de un cliente puntual)
+    filtro_usuario = request.query_params.get('usuario')
+    if filtro_usuario:
+        sesiones_qs = sesiones_qs.filter(usuario__username__icontains=filtro_usuario)
+
+    sesiones = sesiones_qs.values(
         'id',
         'usuario__username',
         'usuario__first_name',
