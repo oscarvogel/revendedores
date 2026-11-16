@@ -1497,6 +1497,7 @@ export default {
       
       // Filtro global por usuario
       filtroUsuarioGlobal: '',
+      filtroRunId: 0,
       listaUsuarios: [],
       loadingUsuarios: false,
       mostrarSugerenciasUsuarios: false,
@@ -1957,6 +1958,9 @@ export default {
     },
 
     async reloadData() {
+      // Invalida una corrida de filtro en curso: esta recarga usa el filtro
+      // actual y sus respuestas son las que valen.
+      ++this.filtroRunId;
       this.loading = true;
       try {
         await this.fetchDashboardData(true);
@@ -2150,6 +2154,8 @@ export default {
       this.filtroUsuarioGlobal = '';
       this.usuariosBusqueda = '';
       this.mostrarSugerenciasUsuarios = false;
+      this.listaUsuarios = [];
+      clearTimeout(this.busquedaTimeout);
       this.aplicarFiltroUsuarioGlobal();
     },
 
@@ -2169,24 +2175,35 @@ export default {
 
     // Aplicar filtro global por usuario
     async aplicarFiltroUsuarioGlobal() {
+      // Guard contra clicks rápidos (filtrar -> limpiar -> filtrar):
+      // si arranca una corrida nueva, la anterior se descarta y no pisa datos.
+      const runId = ++this.filtroRunId;
+      const cancelado = () => runId !== this.filtroRunId;
       this.loading = true;
       try {
         // Recargar todos los datos con el filtro aplicado:
         // consultas de precios, ingresos/sesiones, favoritos, búsquedas,
         // ventas, descargas y vistas de ofertas/discontinuados
         await this.fetchDashboardData(true);
+        if (cancelado()) return;
         await this.fetchDailySales(true);
+        if (cancelado()) return;
         await this.fetchArticulosMasConsultados();
+        if (cancelado()) return;
         await this.fetchExportsSummary();
+        if (cancelado()) return;
         await this.fetchArticulosVistasSummary();
+        if (cancelado()) return;
         
         // Si las secciones de gestión están abiertas, recargarlas también
         if (this.mostrarPedidos) {
           await this.cargarTodosPedidos(1);
+          if (cancelado()) return;
         }
         
         if (this.mostrarClientes) {
           await this.cargarTodosClientes(1);
+          if (cancelado()) return;
         }
         
         if (this.filtroUsuarioGlobal) {
@@ -2195,9 +2212,9 @@ export default {
           Toast.show('Filtro removido - mostrando todos los datos', 'info');
         }
       } catch (error) {
-        Toast.show('Error al aplicar filtro', 'error');
+        if (!cancelado()) Toast.show('Error al aplicar filtro', 'error');
       } finally {
-        this.loading = false;
+        if (!cancelado()) this.loading = false;
       }
     },
 
