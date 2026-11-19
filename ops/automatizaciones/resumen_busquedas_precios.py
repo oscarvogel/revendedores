@@ -98,7 +98,13 @@ def _load_runtime() -> dict[str, Any]:
         cursor = db_reventa.execute_sql(sql, params)
         return list(cursor.fetchall())
 
-    return {"query": query}
+    def execute_batch(statements: list[tuple[str, tuple[Any, ...]]]) -> None:
+        """Ejecuta varias sentencias en una sola transacción (todo o nada)."""
+        with db_reventa.atomic():
+            for sql, params in statements:
+                db_reventa.execute_sql(sql, params)
+
+    return {"query": query, "execute_batch": execute_batch}
 
 
 def _fmt_dt_nosec(dt: datetime) -> str:

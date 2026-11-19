@@ -134,6 +134,10 @@ class Cliente(models.Model):
     alta_automatica = models.BooleanField(
         default=False,
         help_text='Ficha creada por auto-alta del portal (revisar datos en Ventas).')
+    recibe_ofertas_email = models.BooleanField(
+        default=True,
+        verbose_name='Recibe ofertas por email',
+        help_text='Destildar si el cliente pidió la BAJA de las sugerencias por mail.')
 
     def save(self, *args, **kwargs):
         """Formatea el numero_cliente con ceros a la izquierda (00040)."""
@@ -717,3 +721,26 @@ class BotConversationLog(models.Model):
         actor = self.usuario.username if self.usuario else self.telefono or 'anon'
         return f"{self.origen} - {actor} - {self.fecha_hora:%Y-%m-%d %H:%M}"
         
+
+
+class OfertaEnviada(models.Model):
+    """Artículo ofrecido por mail a un cliente que lo miró y no lo compró.
+
+    Lo escribe el job ``ops/automatizaciones/oportunidades_miro_no_compro.py``
+    (SQL directo) para no repetir el mismo artículo ni saturar al cliente.
+    """
+
+    cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE, related_name='ofertas_enviadas')
+    articulo = models.ForeignKey(Articulos, on_delete=models.CASCADE, related_name='ofertas_enviadas')
+    enviado_en = models.DateTimeField(default=timezone.now, db_index=True)
+    consultas = models.PositiveIntegerField(default=0, help_text='Clics en Ver precio que la motivaron')
+    email = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        verbose_name = 'Oferta enviada (miró y no compró)'
+        verbose_name_plural = 'Ofertas enviadas (miró y no compró)'
+        ordering = ['-enviado_en']
+        indexes = [models.Index(fields=['cliente', 'enviado_en'])]
+
+    def __str__(self):
+        return f"{self.cliente_id} - {self.articulo_id} ({self.enviado_en:%Y-%m-%d})"

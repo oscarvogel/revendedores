@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import BonificacionCliente, Cliente, FormaPago, Localidades, Articulos, ArticuloDestacado, ArticuloOculto, ExportEvent, LinkOpen
+from .models import BonificacionCliente, Cliente, FormaPago, Localidades, Articulos, ArticuloDestacado, ArticuloOculto, ExportEvent, LinkOpen, OfertaEnviada
 
 # Register your models here.
 
@@ -25,12 +25,22 @@ class BonificacionClienteAdmin(admin.ModelAdmin):
     raw_id_fields = ('cliente',)
 
 class ClienteAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'codigo_localidad', 'lista_precio')
-    search_fields = ('nombre',)
-    list_filter = ('lista_precio',)
+    list_display = ('nombre', 'codigo_localidad', 'lista_precio', 'recibe_ofertas_email')
+    search_fields = ('nombre', 'numero_cliente')
+    list_filter = ('lista_precio', 'recibe_ofertas_email')
     raw_id_fields = ('codigo_localidad','user')
 
 admin.site.register(Cliente, ClienteAdmin)
+
+
+class OfertaEnviadaAdmin(admin.ModelAdmin):
+    list_display = ('enviado_en', 'cliente', 'articulo', 'consultas', 'email')
+    search_fields = ('cliente__nombre', 'cliente__numero_cliente', 'articulo__clave', 'articulo__nombre')
+    raw_id_fields = ('cliente', 'articulo')
+    date_hierarchy = 'enviado_en'
+
+
+admin.site.register(OfertaEnviada, OfertaEnviadaAdmin)
     
 admin.site.register(FormaPago)
 admin.site.register(Localidades, LocalidadesAdmin)

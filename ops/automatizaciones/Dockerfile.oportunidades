@@ -1,0 +1,10 @@
+ARG BASE_IMAGE=local/automatizaciones:rollback-oportunidades
+FROM ${BASE_IMAGE}
+
+# Reutiliza conexión y SMTP de resumen_busquedas_precios (se copia también por
+# el execute_batch nuevo).
+COPY resumen_busquedas_precios.py /opt/automatizaciones/jobs/resumen_busquedas_precios.py
+COPY oportunidades_miro_no_compro.py /opt/automatizaciones/jobs/oportunidades_miro_no_compro.py
+COPY cron.disabled /etc/cron.d/automatizaciones
+
+RUN chmod 0644 /etc/cron.d/automatizaciones

@@ -1,0 +1,6 @@
+# Miraron y no compraron (08:00 Arg, lunes a sábado; consultas de los últimos 7 días).
+# Reporte interno por vendedor vía SMTP de /run/secrets/informes-diarios.env.
+# Para escribirle también a los clientes, agregar --enviar-clientes al comando
+# (encola en fe.emails_pendientes; probar antes con --enviar-clientes --dry-run).
+# Lock propio; logs en /data/logs/linux/oportunidades_miro_no_compro/.
+0 8 * * 1-6 root JOB_NAME=oportunidades_miro_no_compro JOB_TIMEOUT_SECONDS=900 JOB_COMMAND='set -a; . /run/secrets/informes-diarios.env; set +a; python3 /opt/automatizaciones/jobs/oportunidades_miro_no_compro.py' JOB_LOCK_FILE=/data/locks/oportunidades_miro_no_compro.lock /usr/local/bin/automatizaciones-runner >> /data/logs/linux/oportunidades_miro_no_compro/cron.log 2>&1
