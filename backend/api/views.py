@@ -733,7 +733,13 @@ class ArticuloViewSet(BaseAppModelViewSet):
     def get_serializer_context(self):
         context = super().get_serializer_context()
         request = self.request
-        condicion_pago = request.query_params.get('condicion_pago') or '00'
+        condicion_pago = (request.query_params.get('condicion_pago') or '').strip()
+        if not condicion_pago:
+            try:
+                cliente_ctx = request.user.cliente
+                condicion_pago = cliente_ctx.condicion_pago_id or '00'
+            except Exception:
+                condicion_pago = '00'
         custom_params = {
             'modalidad': request.query_params.get('modalidad', 'retira'),
             'con_impuestos': request.query_params.get('con_impuestos', 'true').lower() == 'true',
@@ -757,7 +763,11 @@ class FormasPagoView(APIView):
             ).distinct()
 
             serializer = FormaPagoSerializer(formas_pago, many=True)
-            return Response(serializer.data)
+            return Response({
+                'formas_pago': serializer.data,
+                'default_id': cliente.condicion_pago_id,
+                'lista_precio': lista_precio,
+            })
 
         except Cliente.DoesNotExist:
             return Response(
@@ -826,9 +836,9 @@ def consultar_precio(request):
             return Response({'error': 'Cliente no encontrado'}, status=404)
         
         # Obtener parámetros de consulta
-        modalidad = request.data.get('modalidad', 'retira')
+        modalidad = request.data.get('modalidad') or 'retira'
         con_impuestos = request.data.get('con_impuestos', True)
-        condicion_pago_id = request.data.get('condicion_pago', cliente.condicion_pago.id if cliente.condicion_pago else None)
+        condicion_pago_id = request.data.get('condicion_pago') or (cliente.condicion_pago.id if cliente.condicion_pago else None)
         
         precio_calculado = calcular_precio_articulo(
             articulo=articulo,
@@ -892,9 +902,9 @@ def exportar_favoritos(request):
             return Response({'error': 'No tenés permiso para descargar la lista.'}, status=403)
 
         # Obtener parámetros de consulta (los mismos que usa en la vista principal)
-        modalidad = request.query_params.get('modalidad', 'retira')
-        con_impuestos = request.query_params.get('con_impuestos', 'true').lower() == 'true'
-        condicion_pago_id = request.query_params.get('condicion_pago', cliente.condicion_pago.id if cliente.condicion_pago else '00')
+        modalidad = request.query_params.get('modalidad') or 'retira'
+        con_impuestos = (request.query_params.get('con_impuestos', 'true') or 'true').lower() == 'true'
+        condicion_pago_id = request.query_params.get('condicion_pago') or (cliente.condicion_pago.id if cliente.condicion_pago else '00')
         
         # Obtener todos los favoritos del usuario con artículos relacionados
         favoritos = list(

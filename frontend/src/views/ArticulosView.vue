@@ -43,6 +43,8 @@ const condicionPago = ref('')
 // Estado para formas de pago
 const formasPago = ref([])
 const loadingFormasPago = ref(false)
+const formasPagoLoaded = ref(false)
+const condicionPagoDefaultId = ref('')
 
 // Estado de artículos
 const articulos = ref([])
@@ -300,7 +302,7 @@ const getOfferExpiry = (art) => {
 }
 
 // === Cargar filtros guardados del localStorage ===
-const loadSavedFilters = () => {
+const loadSavedFilters = (defaultId = '') => {
   const savedModalidad = localStorage.getItem('articulos_modalidad')
   if (savedModalidad === 'retira' || savedModalidad === 'reparto') {
     modalidad.value = savedModalidad
@@ -313,10 +315,26 @@ const loadSavedFilters = () => {
     conImpuestos.value = false
   }
 
+  const validIds = formasPago.value.map(fp => String(fp.id))
   const savedCondicion = localStorage.getItem('condicion_pago')
-  if (savedCondicion && formasPago.value.some(fp => fp.id === savedCondicion)) {
-    condicionPago.value = savedCondicion
+
+  if (savedCondicion && validIds.includes(String(savedCondicion))) {
+    // Prioridad 1: última selección del usuario (si sigue vigente para su lista)
+    condicionPago.value = formasPago.value.find(fp => String(fp.id) === String(savedCondicion))?.id ?? savedCondicion
+  } else if (defaultId && validIds.includes(String(defaultId))) {
+    // Prioridad 2: condición habitual del cliente
+    condicionPago.value = formasPago.value.find(fp => String(fp.id) === String(defaultId))?.id ?? defaultId
+  } else if (defaultId && formasPago.value.some(fp => fp.id === defaultId)) {
+    condicionPago.value = defaultId
+  } else if (formasPago.value.length > 0) {
+    // Fallback: evitar que quede vacío (distorsiona precios)
+    condicionPago.value = formasPago.value[0].id
+  } else {
+    condicionPago.value = ''
   }
+  // Persistir la resolución para que el resto de la app (carrito, revisión)
+  // use siempre la misma condición efectiva.
+  saveFilters()
 
   const savedPageSize = localStorage.getItem('articulos_page_size')
   pageSize.value = normalizePageSize(savedPageSize)
@@ -388,8 +406,13 @@ const fetchArticulos = async () => {
       page_size: pageSize.value,
       modalidad: modalidad.value,
       con_impuestos: conImpuestos.value,
-      condicion_pago: condicionPago.value
     };
+
+    // Solo enviar condición si hay una seleccionada; si se omite,
+    // el backend usa la condición habitual del cliente.
+    if (condicionPago.value !== '' && condicionPago.value !== null && condicionPago.value !== undefined) {
+      params.condicion_pago = condicionPago.value
+    }
 
     if (searchQuery.value.trim()) {
       params.search = searchQuery.value.trim();
@@ -478,8 +501,10 @@ const consultarPrecio = async (articulo) => {
       articulo_clave: articulo.clave,
       modalidad: modalidad.value,
       con_impuestos: conImpuestos.value,
-      condicion_pago: condicionPago.value
     };
+    if (condicionPago.value !== '' && condicionPago.value !== null && condicionPago.value !== undefined) {
+      consultaData.condicion_pago = condicionPago.value
+    }
     
     console.log('Enviando consulta de precio:', consultaData);
     
@@ -518,14 +543,21 @@ const fetchFormasPago = async () => {
   loadingFormasPago.value = true
   try {
     const response = await api.get('/api/formas-pago/')
-    formasPago.value = response.data
-    loadSavedFilters()
+    const payload = response.data
+    // Compatibilidad: el backend nuevo devuelve objeto {formas_pago, default_id},
+    // el anterior devolvía el array directamente.
+    const lista = Array.isArray(payload) ? payload : (payload.formas_pago || [])
+    const defaultId = Array.isArray(payload) ? '' : (payload.default_id || '')
+    formasPago.value = lista
+    condicionPagoDefaultId.value = defaultId ? String(defaultId) : ''
+    loadSavedFilters(defaultId)
   } catch (err) {
     console.error('Error al cargar formas de pago:', err)
     condicionPago.value = ''
     showNotification('No se pudieron cargar las condiciones de pago.', 'error')
   } finally {
     loadingFormasPago.value = false
+    formasPagoLoaded.value = true
   }
 }
 
@@ -547,7 +579,9 @@ watch(searchQuery, () => {
 
 // Al cambiar condición de pago
 watch(condicionPago, () => {
+  if (!formasPagoLoaded.value) return
   saveFilters()
+  currentPage.value = 1
   fetchArticulos()
 })
 
@@ -636,12 +670,15 @@ const exportToExcel = async () => {
     showNotification('Preparando exportación de favoritos...', 'info')
     
     // Llamar al endpoint optimizado de backend
+    const exportParams = {
+      modalidad: modalidad.value,
+      con_impuestos: conImpuestos.value,
+    }
+    if (condicionPago.value !== '' && condicionPago.value !== null && condicionPago.value !== undefined) {
+      exportParams.condicion_pago = condicionPago.value
+    }
     const response = await api.get('/api/exportar-favoritos/', {
-      params: {
-        modalidad: modalidad.value,
-        con_impuestos: conImpuestos.value,
-        condicion_pago: condicionPago.value
-      }
+      params: exportParams
     })
     
     if (response.data.success) {
@@ -968,13 +1005,16 @@ const quickAddToCart = (articulo) => {
 }
 
 // Detectar redimensionamiento
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener('resize', () => {
     isDesktop.value = window.innerWidth >= 768
   })
 
-  fetchFormasPago()
-  fetchArticulos()
+  // Primero formas de pago para resolver la condición efectiva
+  // (última selección o condición del cliente) y recién después
+  // pedir artículos con precios correctos.
+  await fetchFormasPago()
+  await fetchArticulos()
 
   if (route.query.discontinuados) {
     trackArticuloView('discontinuado')
@@ -1103,7 +1143,7 @@ onMounted(() => {
             Filtros
           </span>
           <span
-            v-if="modalidad !== 'retira' || !conImpuestos || condicionPago"
+            v-if="modalidad !== 'retira' || !conImpuestos || (condicionPago && String(condicionPago) !== String(condicionPagoDefaultId))"
             class="w-2 h-2 bg-red-500 rounded-full"
           ></span>
         </button>
