@@ -1302,9 +1302,9 @@ onMounted(async () => {
 
             <!-- Contenido de la tarjeta -->
               <div class="flex flex-1 flex-col p-4">
-              <div class="flex justify-between items-start">
+              <div class="flex justify-between items-start gap-2">
                 <h3
-                  class="text-lg font-bold text-gray-900 line-clamp-2 flex-1"
+                  class="min-h-[3.5rem] flex-1 break-words text-lg font-bold leading-snug text-gray-900"
                   :title="art.nombre"
                   v-html="highlightMatch(art.nombre)"
                 ></h3>
@@ -1314,7 +1314,7 @@ onMounted(async () => {
                   </div>
                 <button
                   @click.stop="toggleFavorite(art)"
-                  class="p-1 rounded-full text-gray-400 hover:text-red-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors duration-200"
+                  class="flex-shrink-0 p-1 rounded-full text-gray-400 hover:text-red-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors duration-200"
                   :class="{ 'text-red-500': art.is_favorito }"
                   aria-label="Añadir o quitar de favoritos"
                 >
