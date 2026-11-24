@@ -1552,3 +1552,266 @@ def sincronizar_carrito(request):
         traceback.print_exc()
         return Response({'error': 'Error al sincronizar carrito'}, status=500)
 
+
+# === CLIENTES INACTIVOS (reactivación) ===
+
+def _ultimo_ingreso_info(user, ultima_sesion):
+    """Devuelve (ultimo_ingreso_datetime, dias_inactivo) usando solo login.
+
+    Solo login = max(user.last_login, ultima sesion de RegistroSesion).
+    Si nunca ingresó, se usa date_joined como referencia.
+    """
+    candidatos = [d for d in [user.last_login, ultima_sesion] if d]
+    if candidatos:
+        ultimo = max(candidatos)
+    else:
+        ultimo = user.date_joined
+    try:
+        dias = (timezone.now() - ultimo).days
+    except Exception:
+        dias = 0
+    return ultimo, max(0, dias)
+
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def clientes_inactivos(request):
+    """Lista clientes que no ingresan hace N días (solo login).
+
+    Query params:
+      - dias (default 30): umbral de inactividad
+      - search: filtra por numero, nombre, username o email
+      - solo_con_email (default 1): 1 = solo con email válido
+      - page, page_size
+    """
+    from django.core.paginator import Paginator
+
+    try:
+        dias = request.query_params.get('dias', '30')
+        try:
+            dias = int(dias)
+        except (TypeError, ValueError):
+            dias = 30
+        dias = max(1, min(dias, 730))
+
+        search = (request.query_params.get('search') or '').strip()
+        solo_con_email = (request.query_params.get('solo_con_email', '1') or '1').lower() not in ('0', 'false', 'no')
+
+        cutoff = timezone.now() - timedelta(days=dias)
+
+        qs = Cliente.objects.select_related('user').annotate(
+            ultima_sesion=Max('user__registrosesion__inicio_sesion'),
+        ).filter(
+            user__is_active=True,
+        ).exclude(
+            # Activo = login reciente O sesión reciente -> lo sacamos
+            Q(user__last_login__gte=cutoff) | Q(ultima_sesion__gte=cutoff)
+        )
+
+        if search:
+            qs = qs.filter(
+                Q(numero_cliente__icontains=search)
+                | Q(nombre__icontains=search)
+                | Q(user__username__icontains=search)
+                | Q(user__email__icontains=search)
+            )
+
+        qs = qs.order_by('user__last_login', 'ultima_sesion')
+
+        # Armar lista con cálculo de días (incluye nunca ingresó)
+        items = []
+        for c in qs.iterator(chunk_size=500):
+            user = c.user
+            ultimo, dias_inac = _ultimo_ingreso_info(user, c.ultima_sesion)
+            email = (user.email or '').strip()
+            if solo_con_email and not email:
+                continue
+            items.append({
+                'cliente_id': c.id,
+                'numero_cliente': c.numero_cliente,
+                'nombre': c.nombre,
+                'username': user.username,
+                'email': email,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'last_login': user.last_login.isoformat() if user.last_login else None,
+                'ultima_sesion': c.ultima_sesion.isoformat() if c.ultima_sesion else None,
+                'ultimo_ingreso': ultimo.isoformat() if ultimo else None,
+                'dias_inactivo': dias_inac,
+                'date_joined': user.date_joined.isoformat() if user.date_joined else None,
+                'recibe_ofertas_email': c.recibe_ofertas_email,
+                'nunca_ingreso': bool(not user.last_login and not c.ultima_sesion),
+            })
+
+        # Orden: más días inactivo primero
+        items.sort(key=lambda x: x['dias_inactivo'], reverse=True)
+
+        try:
+            page = max(1, int(request.query_params.get('page', 1)))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(request.query_params.get('page_size', 20))
+        except (TypeError, ValueError):
+            page_size = 20
+        page_size = min(max(1, page_size), 200)
+
+        paginator = Paginator(items, page_size)
+        page_obj = paginator.get_page(page)
+
+        return Response({
+            'results': list(page_obj.object_list),
+            'pagination': {
+                'current_page': page_obj.number,
+                'total_pages': paginator.num_pages,
+                'total_items': paginator.count,
+                'has_next': page_obj.has_next(),
+                'has_previous': page_obj.has_previous(),
+                'page_size': page_size,
+            },
+            'filtros': {'dias': dias, 'search': search, 'solo_con_email': solo_con_email},
+        })
+    except Exception as e:
+        logger.exception('Error al obtener clientes inactivos')
+        return Response({'error': f'Error al obtener clientes inactivos: {e}'}, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([IsAdminUser])
+def enviar_reactivacion(request):
+    """Encola mails de reactivación por la cola fe.emails_pendientes.
+
+    Body JSON:
+      - cliente_ids: [ids de Cliente] (requerido, max 200 por tanda)
+      - dias: para el texto "hace N días" (default 30)
+      - asunto: opcional, override
+    Respeta: email válido ASCII, recibe_ofertas_email (baja).
+    Genera links con tracking (campaign=reactivacion-YYYYMMDD).
+    """
+    import re
+    from django.core import signing
+    from django.template.loader import render_to_string
+    from django.conf import settings as dj_settings
+    from django.urls import reverse
+
+    try:
+        cliente_ids = request.data.get('cliente_ids') or []
+        if not isinstance(cliente_ids, list) or not cliente_ids:
+            return Response({'error': 'cliente_ids es requerido (lista no vacía)'}, status=400)
+        if len(cliente_ids) > 200:
+            return Response({'error': 'Máximo 200 clientes por tanda'}, status=400)
+
+        try:
+            dias_param = int(request.data.get('dias', 30))
+        except (TypeError, ValueError):
+            dias_param = 30
+
+        asunto_override = (request.data.get('asunto') or '').strip()[:120]
+
+        clientes = list(Cliente.objects.select_related('user').filter(
+            id__in=cliente_ids, user__is_active=True,
+        ))
+        if not clientes:
+            return Response({'error': 'No se encontraron clientes activos con esos ids'}, status=404)
+
+        portal_url = getattr(dj_settings, 'FRONTEND_URL', '').rstrip('/') or 'https://ventas.ferreteriaavenida.com.ar'
+        campaign = f"reactivacion-{timezone.localdate().strftime('%Y%m%d')}"
+        email_re = re.compile(r'^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$')
+
+        # Helpers de tracking: link + píxel firmados
+        def _track_url(payload):
+            token = signing.dumps(payload)
+            path = reverse('track_redirect') + f"?t={token}"
+            try:
+                return request.build_absolute_uri(path)
+            except Exception:
+                return f"{portal_url}/api/track/?t={token}"
+
+        def _pixel_url(payload):
+            token = signing.dumps(payload)
+            path = reverse('track_pixel') + f"?t={token}"
+            try:
+                return request.build_absolute_uri(path)
+            except Exception:
+                return f"{portal_url}/api/track-pixel/?t={token}"
+
+        from .services.email_cola import encolar_email
+        from django.core.mail import send_mail as django_send_mail
+
+        encolados = 0
+        enviados_smtp = 0
+        omitidos = []
+        errores = []
+
+        for c in clientes:
+            user = c.user
+            email = (user.email or '').strip()
+            if not email or not email_re.match(email):
+                omitidos.append({'numero_cliente': c.numero_cliente, 'username': user.username, 'motivo': 'sin email válido'})
+                continue
+            if not c.recibe_ofertas_email:
+                omitidos.append({'numero_cliente': c.numero_cliente, 'username': user.username, 'motivo': 'baja (recibe_ofertas_email=False)'})
+                continue
+
+            payload = {'url': f"{portal_url}/productos", 'email': email, 'campaign': campaign}
+            portal_trackeado = _track_url(payload)
+            pixel = _pixel_url(payload)
+
+            # Días reales para el texto (si el staff filtró por 30, igual mostramos el real)
+            _, dias_reales = _ultimo_ingreso_info(
+                user,
+                RegistroSesion.objects.filter(usuario=user).order_by('-inicio_sesion').values_list('inicio_sesion', flat=True).first(),
+            )
+            contexto = {
+                'nombre': c.nombre or f"{user.first_name} {user.last_name}".strip() or user.username,
+                'username': user.username,
+                'numero_cliente': c.numero_cliente,
+                'dias_inactivo': max(dias_reales, dias_param),
+                'portal_url': portal_url,
+                'portal_url_trackeado': portal_trackeado,
+                'pixel_url': pixel,
+            }
+            try:
+                html = render_to_string('emails/reactivacion.html', contexto)
+            except Exception:
+                logger.exception('No se pudo renderizar template reactivacion')
+                html = None
+            texto = (
+                f"Hola {contexto['nombre']},\n\n"
+                f"Hace {contexto['dias_inactivo']} días que no ingresás al portal de Ferretería Avenida "
+                f"(usuario {user.username}, cliente {c.numero_cliente}).\n"
+                "Tenemos precios actualizados, ofertas y novedades en artículos.\n"
+                f"Entrá acá: {portal_trackeado}\n\n"
+                "Saludos,\nVentas - Ferretería Avenida\n\n"
+                "Si no querés recibir estas invitaciones, respondé BAJA.\n"
+            )
+            asunto = asunto_override or 'Te extrañamos: volvé a consultar precios y novedades'
+            try:
+                reg = encolar_email(email, asunto, cuerpo_html=html, cuerpo_texto=texto)
+                if reg is not None:
+                    encolados += 1
+                else:
+                    # Sin cola -> SMTP directo
+                    django_send_mail(asunto, texto, dj_settings.DEFAULT_FROM_EMAIL, [email],
+                                     html_message=html, fail_silently=False)
+                    enviados_smtp += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.exception('Error encolando reactivación a %s', email)
+                errores.append({'numero_cliente': c.numero_cliente, 'email': email, 'error': str(exc)[:300]})
+
+        logger.info('Staff %s envió reactivación: cola=%s smtp=%s omitidos=%s errores=%s campaign=%s',
+                    request.user.username, encolados, enviados_smtp, len(omitidos), len(errores), campaign)
+
+        return Response({
+            'success': True,
+            'campaign': campaign,
+            'encolados': encolados,
+            'enviados_smtp_directo': enviados_smtp,
+            'omitidos': omitidos,
+            'errores': errores,
+            'message': f'{encolados + enviados_smtp} mails procesados, {len(omitidos)} omitidos, {len(errores)} con error.',
+        })
+    except Exception as e:
+        logger.exception('Error al enviar reactivación')
+        return Response({'error': f'Error al enviar reactivación: {e}'}, status=500)
+

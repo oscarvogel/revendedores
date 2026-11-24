@@ -90,4 +90,6 @@ urlpatterns = [
     path('staff/clientes/', staff_views.StaffClientesView.as_view(), name='staff-clientes'),
     path('staff/clientes/<int:pk>/', staff_views.StaffClientesView.as_view(), name='staff-cliente-detail'),
     path('staff/clientes/datos-auxiliares/', staff_views.obtener_datos_auxiliares_cliente, name='datos-auxiliares-cliente'),
+    path('staff/clientes/inactivos/', staff_views.clientes_inactivos, name='staff-clientes-inactivos'),
+    path('staff/clientes/inactivos/enviar/', staff_views.enviar_reactivacion, name='staff-clientes-inactivos-enviar'),
 ]
