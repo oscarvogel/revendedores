@@ -1815,3 +1815,217 @@ def enviar_reactivacion(request):
         logger.exception('Error al enviar reactivación')
         return Response({'error': f'Error al enviar reactivación: {e}'}, status=500)
 
+
+# === REACTIVADOS (quién volvió por la campaña) ===
+
+def _ultima_campana_reactivacion():
+    """Última campaign reactivacion-* con aperturas, o None."""
+    row = (LinkOpen.objects.filter(campaign__startswith='reactivacion-')
+           .order_by('-opened_at').values_list('campaign', flat=True).first())
+    return row
+
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def clientes_reactivados(request):
+    """Quién abrió el mail de reactivación y quién volvió al portal.
+
+    Query params:
+      - campaign (default: última reactivacion-*)
+    Cruza LinkOpen.email -> User -> Cliente y busca la primera sesión
+    posterior a la apertura. Devuelve por email: abrió, volvió, fechas,
+    consultas y pedidos posteriores.
+    """
+    try:
+        from .models import ConsultaPrecio
+
+        campaign = (request.query_params.get('campaign') or '').strip()
+        if not campaign:
+            campaign = _ultima_campana_reactivacion()
+            if not campaign:
+                return Response({'results': [], 'campaign': None,
+                                 'message': 'Todavía no hay aperturas de campañas de reactivación.'})
+
+        aperturas = (LinkOpen.objects.filter(campaign=campaign)
+                      .exclude(recipient_email__isnull=True).exclude(recipient_email='')
+                      .order_by('opened_at'))
+        por_email = {}
+        for a in aperturas:
+            email = (a.recipient_email or '').strip().lower()
+            if not email:
+                continue
+            item = por_email.setdefault(email, {'primera_apertura': a.opened_at, 'aperturas': 0})
+            item['aperturas'] += 1
+            if a.opened_at and a.opened_at < item['primera_apertura']:
+                item['primera_apertura'] = a.opened_at
+
+        if not por_email:
+            return Response({'results': [], 'campaign': campaign})
+
+        users = User.objects.filter(email__in=list(por_email.keys())).select_related('cliente')
+        user_por_email = {}
+        for u in users:
+            user_por_email.setdefault((u.email or '').strip().lower(), u)
+
+        # Sesiones ordenadas (una sola query); se busca la primera posterior a la apertura
+        sesiones = list((RegistroSesion.objects.filter(usuario__in=[u for u in user_por_email.values()])
+                    .order_by('inicio_sesion').values('usuario_id', 'inicio_sesion')))
+
+        resultados = []
+        for email, info in por_email.items():
+            u = user_por_email.get(email)
+            apertura = info['primera_apertura']
+            fila = {
+                'email': email,
+                'aperturas': info['aperturas'],
+                'primera_apertura': apertura.isoformat() if apertura else None,
+                'cliente_id': None, 'numero_cliente': None, 'nombre': None,
+                'username': u.username if u else None,
+                'volvio': False, 'primer_regreso': None,
+                'consultas_post': 0, 'pedidos_post': 0,
+                'recibe_ofertas_email': True,
+            }
+            if not u:
+                resultados.append(fila)
+                continue
+            try:
+                c = u.cliente
+                fila.update({'cliente_id': c.id, 'numero_cliente': c.numero_cliente,
+                             'nombre': c.nombre, 'recibe_ofertas_email': c.recibe_ofertas_email})
+            except Exception:
+                pass
+            # Primera sesión posterior a la apertura = volvió
+            for s in sesiones:
+                if s['usuario_id'] == u.id and apertura and s['inicio_sesion'] and s['inicio_sesion'] > apertura:
+                    fila['volvio'] = True
+                    fila['primer_regreso'] = s['inicio_sesion'].isoformat()
+                    break
+            if apertura:
+                fila['consultas_post'] = ConsultaPrecio.objects.filter(
+                    usuario=u, fecha_hora__gt=apertura).count()
+                fila['pedidos_post'] = Pedido.objects.filter(
+                    user=u, fecha_creacion__gt=apertura).count()
+            resultados.append(fila)
+
+        resultados.sort(key=lambda r: (not r['volvio'], r['primera_apertura'] or ''))
+        return Response({
+            'campaign': campaign,
+            'results': resultados,
+            'resumen': {
+                'abrieron': len(resultados),
+                'volvieron': sum(1 for r in resultados if r['volvio']),
+            },
+        })
+    except Exception as e:
+        logger.exception('Error al obtener reactivados')
+        return Response({'error': f'Error al obtener reactivados: {e}'}, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([IsAdminUser])
+def enviar_guia_vuelta(request):
+    """Mail de bienvenida de vuelta con guía rápida, por la cola.
+
+    Body: {cliente_ids: [...] (max 100), asunto?}
+    Campaign de tracking: bienvenida-vuelta-YYYYMMDD.
+    """
+    import re
+    from django.core import signing
+    from django.template.loader import render_to_string
+    from django.conf import settings as dj_settings
+    from django.urls import reverse
+
+    try:
+        cliente_ids = request.data.get('cliente_ids') or []
+        if not isinstance(cliente_ids, list) or not cliente_ids:
+            return Response({'error': 'cliente_ids es requerido (lista no vacía)'}, status=400)
+        if len(cliente_ids) > 100:
+            return Response({'error': 'Máximo 100 clientes por tanda'}, status=400)
+        asunto = (request.data.get('asunto') or '').strip()[:120] or 'Bienvenido de vuelta: guía rápida del portal'
+
+        clientes = list(Cliente.objects.select_related('user').filter(
+            id__in=cliente_ids, user__is_active=True))
+        if not clientes:
+            return Response({'error': 'No se encontraron clientes activos con esos ids'}, status=404)
+
+        portal_url = getattr(dj_settings, 'FRONTEND_URL', '').rstrip('/') or 'https://ventas.ferreteriaavenida.com.ar'
+        campaign = f"bienvenida-vuelta-{timezone.localdate().strftime('%Y%m%d')}"
+        email_re = re.compile(r'^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$')
+
+        def _track_url(url, email):
+            token = signing.dumps({'url': url, 'email': email, 'campaign': campaign})
+            try:
+                return request.build_absolute_uri(reverse('track_redirect') + f"?t={token}")
+            except Exception:
+                return url
+
+        def _pixel_url(email):
+            token = signing.dumps({'url': f"{portal_url}/productos", 'email': email, 'campaign': campaign})
+            try:
+                return request.build_absolute_uri(reverse('track_pixel') + f"?t={token}")
+            except Exception:
+                return ''
+
+        from .services.email_cola import encolar_email
+        from django.core.mail import send_mail as django_send_mail
+
+        encolados = enviados_smtp = 0
+        omitidos, errores = [], []
+        for c in clientes:
+            user = c.user
+            email = (user.email or '').strip()
+            if not email or not email_re.match(email):
+                omitidos.append({'numero_cliente': c.numero_cliente, 'motivo': 'sin email válido'})
+                continue
+            if not c.recibe_ofertas_email:
+                omitidos.append({'numero_cliente': c.numero_cliente, 'motivo': 'baja (recibe_ofertas_email=False)'})
+                continue
+            nombre = c.nombre or f"{user.first_name} {user.last_name}".strip() or user.username
+            links = {
+                'productos': _track_url(f"{portal_url}/productos", email),
+                'ofertas': _track_url(f"{portal_url}/productos?oferta=1", email),
+                'favoritos': _track_url(f"{portal_url}/favoritos", email),
+                'pedidos': _track_url(f"{portal_url}/pedidos", email),
+            }
+            contexto = {'nombre': nombre, 'username': user.username,
+                        'numero_cliente': c.numero_cliente, 'portal_url': portal_url,
+                        'links': links, 'pixel_url': _pixel_url(email)}
+            try:
+                html = render_to_string('emails/bienvenida_vuelta.html', contexto)
+            except Exception:
+                logger.exception('No se pudo renderizar template bienvenida_vuelta')
+                html = None
+            texto = (
+                f"Hola {nombre},\n\nQué bueno verte de vuelta por el portal de Ferretería Avenida. "
+                "Guía rápida:\n"
+                f"1) Consultá precios: {links['productos']}\n"
+                f"2) Mirá ofertas: {links['ofertas']}\n"
+                f"3) Guardá favoritos y descargá tu lista: {links['favoritos']}\n"
+                f"4) Tus pedidos: {links['pedidos']}\n\n"
+                "Cualquier duda respondé este mail.\nSaludos,\nVentas - Ferretería Avenida\n\n"
+                "Si no querés recibir estas invitaciones, respondé BAJA.\n"
+            )
+            try:
+                reg = encolar_email(email, asunto, cuerpo_html=html, cuerpo_texto=texto)
+                if reg is not None:
+                    encolados += 1
+                else:
+                    django_send_mail(asunto, texto, dj_settings.DEFAULT_FROM_EMAIL, [email],
+                                     html_message=html, fail_silently=False)
+                    enviados_smtp += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.exception('Error encolando guía de vuelta a %s', email)
+                errores.append({'numero_cliente': c.numero_cliente, 'error': str(exc)[:300]})
+
+        logger.info('Staff %s envió guía de vuelta: cola=%s smtp=%s omitidos=%s errores=%s campaign=%s',
+                    request.user.username, encolados, enviados_smtp, len(omitidos), len(errores), campaign)
+        return Response({
+            'success': True, 'campaign': campaign,
+            'encolados': encolados, 'enviados_smtp_directo': enviados_smtp,
+            'omitidos': omitidos, 'errores': errores,
+            'message': f'{encolados + enviados_smtp} mails procesados, {len(omitidos)} omitidos, {len(errores)} con error.',
+        })
+    except Exception as e:
+        logger.exception('Error al enviar guía de vuelta')
+        return Response({'error': f'Error al enviar guía de vuelta: {e}'}, status=500)
+

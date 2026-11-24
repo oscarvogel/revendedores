@@ -92,4 +92,6 @@ urlpatterns = [
     path('staff/clientes/datos-auxiliares/', staff_views.obtener_datos_auxiliares_cliente, name='datos-auxiliares-cliente'),
     path('staff/clientes/inactivos/', staff_views.clientes_inactivos, name='staff-clientes-inactivos'),
     path('staff/clientes/inactivos/enviar/', staff_views.enviar_reactivacion, name='staff-clientes-inactivos-enviar'),
+    path('staff/clientes/reactivados/', staff_views.clientes_reactivados, name='staff-clientes-reactivados'),
+    path('staff/clientes/reactivados/enviar-guia/', staff_views.enviar_guia_vuelta, name='staff-clientes-reactivados-enviar-guia'),
 ]
